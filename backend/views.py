@@ -1,4 +1,13 @@
+import json
+
 from django.http import JsonResponse
+from django.utils.dateparse import parse_date, parse_datetime
+from django.utils.timezone import is_naive, make_aware
+from django.views.decorators.csrf import csrf_exempt
+
+from appointments.models import Appointment
+from patients.models import Patient
+from treatments.models import Treatment
 
 
 def tenant_debug(request):
@@ -17,4 +26,117 @@ def tenant_debug(request):
                 }
             ),
         }
+    )
+
+
+@csrf_exempt
+def public_create_appointment(request):
+    if request.method != 'POST':
+        return JsonResponse({'detail': 'Method not allowed'}, status=405)
+
+    clinic = getattr(request, 'clinic', None)
+    if clinic is None:
+        return JsonResponse({'detail': 'Clinic not resolved from host'}, status=400)
+
+    try:
+        payload = json.loads(request.body.decode('utf-8') or '{}')
+    except json.JSONDecodeError:
+        return JsonResponse({'detail': 'Invalid JSON'}, status=400)
+
+    patient_payload = payload.get('patient') or {}
+    first_name = (patient_payload.get('first_name') or '').strip()
+    last_name = (patient_payload.get('last_name') or '').strip()
+    phone = (patient_payload.get('phone') or '').strip()
+    email = (patient_payload.get('email') or '').strip()
+    date_of_birth_raw = (patient_payload.get('date_of_birth') or '').strip()
+
+    if not first_name or not last_name:
+        return JsonResponse({'detail': 'patient.first_name and patient.last_name are required'}, status=400)
+
+    date_of_birth = parse_date(date_of_birth_raw) if date_of_birth_raw else None
+    if date_of_birth_raw and date_of_birth is None:
+        return JsonResponse({'detail': 'patient.date_of_birth must be YYYY-MM-DD'}, status=400)
+
+    starts_at_raw = (payload.get('starts_at') or '').strip()
+    ends_at_raw = (payload.get('ends_at') or '').strip()
+
+    starts_at = parse_datetime(starts_at_raw) if starts_at_raw else None
+    ends_at = parse_datetime(ends_at_raw) if ends_at_raw else None
+
+    if starts_at is None or ends_at is None:
+        return JsonResponse({'detail': 'starts_at and ends_at are required (ISO-8601)'}, status=400)
+
+    if is_naive(starts_at):
+        starts_at = make_aware(starts_at)
+    if is_naive(ends_at):
+        ends_at = make_aware(ends_at)
+
+    if ends_at <= starts_at:
+        return JsonResponse({'detail': 'ends_at must be after starts_at'}, status=400)
+
+    patient = None
+    if email:
+        patient, _ = Patient.objects.get_or_create(
+            clinic=clinic,
+            email=email,
+            defaults={
+                'first_name': first_name,
+                'last_name': last_name,
+                'phone': phone,
+                'date_of_birth': date_of_birth,
+            },
+        )
+    elif phone:
+        patient = (
+            Patient.objects.filter(
+                clinic=clinic,
+                phone=phone,
+                first_name=first_name,
+                last_name=last_name,
+            )
+            .order_by('-id')
+            .first()
+        )
+
+    if patient is None:
+        patient = Patient.objects.create(
+            clinic=clinic,
+            first_name=first_name,
+            last_name=last_name,
+            phone=phone,
+            email=email,
+            date_of_birth=date_of_birth,
+        )
+
+    treatment_id = payload.get('treatment_id')
+    treatment = None
+    if treatment_id is not None:
+        try:
+            treatment = Treatment.objects.get(id=treatment_id, clinic=clinic)
+        except Treatment.DoesNotExist:
+            return JsonResponse({'detail': 'treatment_id not found for this clinic'}, status=400)
+
+    appointment = Appointment.objects.create(
+        clinic=clinic,
+        patient=patient,
+        doctor=None,
+        treatment=treatment,
+        starts_at=starts_at,
+        ends_at=ends_at,
+        status=Appointment.Status.SCHEDULED,
+        notes=(payload.get('notes') or '').strip(),
+    )
+
+    return JsonResponse(
+        {
+            'id': appointment.id,
+            'clinic_id': clinic.id,
+            'patient_id': patient.id,
+            'doctor_id': appointment.doctor_id,
+            'treatment_id': appointment.treatment_id,
+            'starts_at': appointment.starts_at.isoformat(),
+            'ends_at': appointment.ends_at.isoformat(),
+            'status': appointment.status,
+        },
+        status=201,
     )
