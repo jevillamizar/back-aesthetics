@@ -146,3 +146,20 @@ def public_create_appointment(request):
         },
         status=201,
     )
+
+
+def public_treatments(request):
+    if request.method != 'GET':
+        return JsonResponse({'detail': 'Method not allowed'}, status=405)
+
+    clinic = getattr(request, 'clinic', None)
+    if clinic is None:
+        return JsonResponse({'detail': 'Clinic not resolved from host'}, status=400)
+
+    treatments = (
+        Treatment.objects.filter(clinic=clinic, is_active=True)
+        .order_by('name')
+        .values('id', 'name', 'slug', 'duration_minutes', 'price')
+    )
+
+    return JsonResponse({'results': list(treatments)})
