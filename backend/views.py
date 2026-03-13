@@ -109,12 +109,18 @@ def public_create_appointment(request):
         )
 
     treatment_id = payload.get('treatment_id')
+    treatment_slug = (payload.get('treatment_slug') or '').strip()
     treatment = None
     if treatment_id is not None:
         try:
             treatment = Treatment.objects.get(id=treatment_id, clinic=clinic)
         except Treatment.DoesNotExist:
             return JsonResponse({'detail': 'treatment_id not found for this clinic'}, status=400)
+    elif treatment_slug:
+        try:
+            treatment = Treatment.objects.get(clinic=clinic, slug=treatment_slug)
+        except Treatment.DoesNotExist:
+            return JsonResponse({'detail': 'treatment_slug not found for this clinic'}, status=400)
 
     appointment = Appointment.objects.create(
         clinic=clinic,

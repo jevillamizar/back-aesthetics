@@ -5,6 +5,7 @@ class Treatment(models.Model):
     clinic = models.ForeignKey('clinics.Clinic', on_delete=models.PROTECT, related_name='treatments')
 
     name = models.CharField(max_length=255)
+    slug = models.SlugField(max_length=255, null=True, blank=True)
     description = models.TextField(blank=True)
     duration_minutes = models.PositiveIntegerField(default=60)
     price = models.DecimalField(max_digits=10, decimal_places=2, default=0)
@@ -16,8 +17,12 @@ class Treatment(models.Model):
     class Meta:
         verbose_name = 'Treatment'
         verbose_name_plural = 'Treatments'
+        constraints = [
+            models.UniqueConstraint(fields=['clinic', 'slug'], name='uniq_treatment_slug_per_clinic'),
+        ]
         indexes = [
             models.Index(fields=['clinic', 'name']),
+            models.Index(fields=['clinic', 'slug']),
         ]
 
     def __str__(self) -> str:
