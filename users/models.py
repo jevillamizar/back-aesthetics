@@ -33,6 +33,7 @@ class User(AbstractUser):
     class Role(models.TextChoices):
         ADMIN = 'ADMIN', 'Admin'
         DOCTOR = 'DOCTOR', 'Doctor'
+        CLIENT = 'CLIENT', 'Client'
 
     username = None
     email = models.EmailField(unique=True)

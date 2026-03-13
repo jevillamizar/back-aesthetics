@@ -1,0 +1,24 @@
+from django.db import models
+
+
+class Treatment(models.Model):
+    clinic = models.ForeignKey('clinics.Clinic', on_delete=models.PROTECT, related_name='treatments')
+
+    name = models.CharField(max_length=255)
+    description = models.TextField(blank=True)
+    duration_minutes = models.PositiveIntegerField(default=60)
+    price = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    is_active = models.BooleanField(default=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Treatment'
+        verbose_name_plural = 'Treatments'
+        indexes = [
+            models.Index(fields=['clinic', 'name']),
+        ]
+
+    def __str__(self) -> str:
+        return self.name
