@@ -17,11 +17,12 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import path
 
-from .views import public_create_appointment, public_treatments, tenant_debug
+from .views import public_create_appointment, public_landing, public_treatments, tenant_debug
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('tenant/', tenant_debug),
     path('public/appointments/', public_create_appointment),
     path('public/treatments/', public_treatments),
+    path('public/landing/', public_landing),
 ]

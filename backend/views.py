@@ -6,6 +6,7 @@ from django.utils.timezone import is_naive, make_aware
 from django.views.decorators.csrf import csrf_exempt
 
 from appointments.models import Appointment
+from landing.models import ClinicLanding
 from patients.models import Patient
 from treatments.models import Treatment
 
@@ -163,3 +164,47 @@ def public_treatments(request):
     )
 
     return JsonResponse({'results': list(treatments)})
+
+
+def public_landing(request):
+    if request.method != 'GET':
+        return JsonResponse({'detail': 'Method not allowed'}, status=405)
+
+    clinic = getattr(request, 'clinic', None)
+    if clinic is None:
+        return JsonResponse({'detail': 'Clinic not resolved from host'}, status=400)
+
+    landing = (
+        ClinicLanding.objects.filter(clinic=clinic)
+        .order_by('-updated_at')
+        .first()
+    )
+
+    if landing is not None and not landing.is_published:
+        return JsonResponse({'detail': 'Landing not published'}, status=404)
+
+    return JsonResponse(
+        {
+            'clinic': {
+                'id': clinic.id,
+                'name': clinic.name,
+                'slug': clinic.slug,
+            },
+            'landing': (
+                None
+                if landing is None
+                else {
+                    'headline': landing.headline,
+                    'description': landing.description,
+                    'primary_color': landing.primary_color,
+                    'logo_url': landing.logo_url,
+                    'hero_image_url': landing.hero_image_url,
+                    'whatsapp_phone': landing.whatsapp_phone,
+                    'booking_url': landing.booking_url,
+                    'instagram_url': landing.instagram_url,
+                    'facebook_url': landing.facebook_url,
+                    'address': landing.address,
+                }
+            ),
+        }
+    )
