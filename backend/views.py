@@ -183,6 +183,19 @@ def public_landing(request):
     if landing is not None and not landing.is_published:
         return JsonResponse({'detail': 'Landing not published'}, status=404)
 
+    logo_url = ''
+    hero_image_url = ''
+    if landing is not None and getattr(landing, 'logo', None):
+        try:
+            logo_url = request.build_absolute_uri(landing.logo.url)
+        except Exception:
+            logo_url = ''
+    if landing is not None and getattr(landing, 'hero_image', None):
+        try:
+            hero_image_url = request.build_absolute_uri(landing.hero_image.url)
+        except Exception:
+            hero_image_url = ''
+
     return JsonResponse(
         {
             'clinic': {
@@ -197,8 +210,8 @@ def public_landing(request):
                     'headline': landing.headline,
                     'description': landing.description,
                     'primary_color': landing.primary_color,
-                    'logo_url': landing.logo_url,
-                    'hero_image_url': landing.hero_image_url,
+                    'logo_url': logo_url,
+                    'hero_image_url': hero_image_url,
                     'whatsapp_phone': landing.whatsapp_phone,
                     'booking_url': landing.booking_url,
                     'instagram_url': landing.instagram_url,

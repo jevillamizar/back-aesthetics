@@ -8,8 +8,8 @@ class ClinicLanding(models.Model):
     description = models.TextField(blank=True)
 
     primary_color = models.CharField(max_length=20, blank=True)
-    logo_url = models.URLField(blank=True)
-    hero_image_url = models.URLField(blank=True)
+    logo = models.ImageField(upload_to='landing/', blank=True)
+    hero_image = models.ImageField(upload_to='landing/', blank=True)
 
     whatsapp_phone = models.CharField(max_length=50, blank=True)
     booking_url = models.URLField(blank=True)
