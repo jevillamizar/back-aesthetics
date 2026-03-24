@@ -159,8 +159,8 @@ def public_treatments(request):
 
     treatments = (
         Treatment.objects.filter(clinic=clinic, is_active=True)
-        .order_by('name')
-        .values('id', 'name', 'slug', 'duration_minutes', 'price')
+        .order_by('category', 'name')
+        .values('id', 'name', 'slug', 'category', 'description', 'duration_minutes', 'price')
     )
 
     return JsonResponse({'results': list(treatments)})
