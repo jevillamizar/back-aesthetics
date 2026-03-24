@@ -8,6 +8,9 @@ class ClinicLanding(models.Model):
     description = models.TextField(blank=True)
 
     primary_color = models.CharField(max_length=20, blank=True)
+    font_heading = models.CharField(max_length=100, blank=True, help_text='Google Font name for titles, e.g. "Playfair Display"')
+    font_body = models.CharField(max_length=100, blank=True, help_text='Google Font name for body text, e.g. "Inter"')
+    font_accent = models.CharField(max_length=100, blank=True, help_text='Google Font name for decorative text, e.g. "Cormorant Garamond"')
     logo = models.ImageField(upload_to='landing/', blank=True)
     hero_image = models.ImageField(upload_to='landing/', blank=True)
 
