@@ -19,6 +19,7 @@ from django.conf.urls.static import static
 from django.contrib import admin
 from django.urls import path
 
+from .auth_views import auth_login, auth_me
 from .views import public_create_appointment, public_landing, public_treatments, tenant_debug
 
 urlpatterns = [
@@ -27,6 +28,8 @@ urlpatterns = [
     path('public/appointments/', public_create_appointment),
     path('public/treatments/', public_treatments),
     path('public/landing/', public_landing),
+    path('api/auth/login/', auth_login),
+    path('api/auth/me/', auth_me),
 ]
 
 
