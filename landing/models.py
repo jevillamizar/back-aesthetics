@@ -29,6 +29,18 @@ class ClinicLanding(models.Model):
         help_text='Array: [{"name":"Sarah M.","treatment":"Botox","rating":5,"quote":"..."}]',
     )
 
+    about_title = models.CharField(max_length=255, blank=True, help_text='About section title')
+    about_subtitle = models.CharField(max_length=255, blank=True, help_text='About section italic accent line')
+    about_description = models.TextField(blank=True, help_text='About section body text (supports multiple paragraphs)')
+    about_bullets = models.JSONField(
+        default=list,
+        blank=True,
+        help_text='Array of strings: ["Dermatólogos certificados", "Tratamientos aprobados", …]',
+    )
+    about_image = models.ImageField(upload_to='landing/', blank=True, help_text='About section image')
+    about_badge_title = models.CharField(max_length=50, blank=True, help_text='Floating badge big text, e.g. "Top 1%"')
+    about_badge_text = models.CharField(max_length=255, blank=True, help_text='Floating badge description')
+
     phone = models.CharField(max_length=50, blank=True)
     email = models.EmailField(blank=True)
     whatsapp_phone = models.CharField(max_length=50, blank=True)

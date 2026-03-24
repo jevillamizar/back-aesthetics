@@ -196,6 +196,13 @@ def public_landing(request):
         except Exception:
             hero_image_url = ''
 
+    about_image_url = ''
+    if landing is not None and getattr(landing, 'about_image', None):
+        try:
+            about_image_url = request.build_absolute_uri(landing.about_image.url)
+        except Exception:
+            about_image_url = ''
+
     return JsonResponse(
         {
             'clinic': {
@@ -221,6 +228,13 @@ def public_landing(request):
                     'hero_image_url': hero_image_url,
                     'trust_indicators': landing.trust_indicators or [],
                     'testimonials': landing.testimonials or [],
+                    'about_title': landing.about_title,
+                    'about_subtitle': landing.about_subtitle,
+                    'about_description': landing.about_description,
+                    'about_bullets': landing.about_bullets or [],
+                    'about_image_url': about_image_url,
+                    'about_badge_title': landing.about_badge_title,
+                    'about_badge_text': landing.about_badge_text,
                     'phone': landing.phone,
                     'email': landing.email,
                     'whatsapp_phone': landing.whatsapp_phone,
