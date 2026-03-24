@@ -23,7 +23,14 @@ class ClinicLanding(models.Model):
         blank=True,
         help_text='Array of objects: [{"icon":"clock","label":"15+ Años","sub":"Experiencia"}, …]',
     )
+    testimonials = models.JSONField(
+        default=list,
+        blank=True,
+        help_text='Array: [{"name":"Sarah M.","treatment":"Botox","rating":5,"quote":"..."}]',
+    )
 
+    phone = models.CharField(max_length=50, blank=True)
+    email = models.EmailField(blank=True)
     whatsapp_phone = models.CharField(max_length=50, blank=True)
     booking_url = models.URLField(blank=True)
 
