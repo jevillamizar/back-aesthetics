@@ -7,7 +7,11 @@ class ClinicLanding(models.Model):
     headline = models.CharField(max_length=255, blank=True)
     description = models.TextField(blank=True)
 
-    primary_color = models.CharField(max_length=20, blank=True)
+    primary_color = models.CharField(max_length=20, blank=True, help_text='Main brand color, e.g. "#8B9E8B"')
+    secondary_color = models.CharField(max_length=20, blank=True, help_text='Secondary/surface color, e.g. "#F5F5F3"')
+    accent_color = models.CharField(max_length=20, blank=True, help_text='Accent highlight color, e.g. "#D4A574"')
+    background_color = models.CharField(max_length=20, blank=True, help_text='Page background, e.g. "#F5F5F3"')
+    text_color = models.CharField(max_length=20, blank=True, help_text='Main text color, e.g. "#2D2D2D"')
     font_heading = models.CharField(max_length=100, blank=True, help_text='Google Font name for titles, e.g. "Playfair Display"')
     font_body = models.CharField(max_length=100, blank=True, help_text='Google Font name for body text, e.g. "Inter"')
     font_accent = models.CharField(max_length=100, blank=True, help_text='Google Font name for decorative text, e.g. "Cormorant Garamond"')
