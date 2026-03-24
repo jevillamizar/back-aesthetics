@@ -11,6 +11,12 @@ class ClinicLanding(models.Model):
     logo = models.ImageField(upload_to='landing/', blank=True)
     hero_image = models.ImageField(upload_to='landing/', blank=True)
 
+    trust_indicators = models.JSONField(
+        default=list,
+        blank=True,
+        help_text='Array of objects: [{"icon":"clock","label":"15+ Años","sub":"Experiencia"}, …]',
+    )
+
     whatsapp_phone = models.CharField(max_length=50, blank=True)
     booking_url = models.URLField(blank=True)
 

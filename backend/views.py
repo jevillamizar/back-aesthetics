@@ -212,6 +212,7 @@ def public_landing(request):
                     'primary_color': landing.primary_color,
                     'logo_url': logo_url,
                     'hero_image_url': hero_image_url,
+                    'trust_indicators': landing.trust_indicators or [],
                     'whatsapp_phone': landing.whatsapp_phone,
                     'booking_url': landing.booking_url,
                     'instagram_url': landing.instagram_url,
