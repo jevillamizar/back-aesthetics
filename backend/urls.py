@@ -22,7 +22,8 @@ from django.urls import path
 from .admin_views import (
     admin_appointment_detail, admin_appointments,
     admin_dashboard, admin_landing,
-    admin_patients,
+    admin_doctor_detail, admin_doctors,
+    admin_patient_detail, admin_patients,
     admin_treatment_detail, admin_treatments,
 )
 from .auth_views import auth_login, auth_me
@@ -43,6 +44,9 @@ urlpatterns = [
     path('api/appointments/', admin_appointments),
     path('api/appointments/<int:appointment_id>/', admin_appointment_detail),
     path('api/patients/', admin_patients),
+    path('api/patients/<int:patient_id>/', admin_patient_detail),
+    path('api/doctors/', admin_doctors),
+    path('api/doctors/<int:doctor_id>/', admin_doctor_detail),
 ]
 
 

@@ -460,7 +460,19 @@ def admin_appointment_detail(request, appointment_id):
     return JsonResponse({'detail': 'Method not allowed'}, status=405)
 
 
-# ─── Patients (for dropdowns) ────────────────────────────────────────
+# ─── Patients ────────────────────────────────────────────────────────
+
+def _patient_to_dict(p):
+    return {
+        'id': p.id,
+        'first_name': p.first_name,
+        'last_name': p.last_name,
+        'email': p.email or '',
+        'phone': p.phone or '',
+        'date_of_birth': p.date_of_birth.isoformat() if p.date_of_birth else None,
+        'notes': p.notes or '',
+    }
+
 
 @csrf_exempt
 def admin_patients(request):
@@ -469,9 +481,174 @@ def admin_patients(request):
         return err
 
     if request.method == 'GET':
-        qs = Patient.objects.order_by('last_name', 'first_name').values(
-            'id', 'first_name', 'last_name', 'email', 'phone', 'date_of_birth', 'notes'
+        search = request.GET.get('search', '').strip()
+        qs = Patient.objects.order_by('last_name', 'first_name')
+        if search:
+            from django.db.models import Q
+            qs = qs.filter(
+                Q(first_name__icontains=search) | Q(last_name__icontains=search) |
+                Q(email__icontains=search) | Q(phone__icontains=search)
+            )
+        return JsonResponse({'patients': [_patient_to_dict(p) for p in qs]})
+
+    if request.method == 'POST':
+        try:
+            payload = json.loads(request.body.decode('utf-8') or '{}')
+        except json.JSONDecodeError:
+            return JsonResponse({'detail': 'Invalid JSON'}, status=400)
+        first = (payload.get('first_name') or '').strip()
+        last = (payload.get('last_name') or '').strip()
+        if not first or not last:
+            return JsonResponse({'detail': 'first_name and last_name required'}, status=400)
+        from django.utils.dateparse import parse_date as _pd
+        dob = _pd(payload.get('date_of_birth') or '') if payload.get('date_of_birth') else None
+        p = Patient.objects.create(
+            first_name=first,
+            last_name=last,
+            email=(payload.get('email') or '').strip(),
+            phone=(payload.get('phone') or '').strip(),
+            date_of_birth=dob,
+            notes=(payload.get('notes') or '').strip(),
         )
-        return JsonResponse({'patients': list(qs)})
+        return JsonResponse({'patient': _patient_to_dict(p)}, status=201)
+
+    return JsonResponse({'detail': 'Method not allowed'}, status=405)
+
+
+@csrf_exempt
+def admin_patient_detail(request, patient_id):
+    user, err = _require_admin(request)
+    if err:
+        return err
+    try:
+        p = Patient.objects.get(id=patient_id)
+    except Patient.DoesNotExist:
+        return JsonResponse({'detail': 'Not found'}, status=404)
+
+    if request.method == 'GET':
+        return JsonResponse({'patient': _patient_to_dict(p)})
+
+    if request.method == 'PUT':
+        try:
+            payload = json.loads(request.body.decode('utf-8') or '{}')
+        except json.JSONDecodeError:
+            return JsonResponse({'detail': 'Invalid JSON'}, status=400)
+        if 'first_name' in payload:
+            p.first_name = (payload['first_name'] or '').strip()
+        if 'last_name' in payload:
+            p.last_name = (payload['last_name'] or '').strip()
+        if 'email' in payload:
+            p.email = (payload['email'] or '').strip()
+        if 'phone' in payload:
+            p.phone = (payload['phone'] or '').strip()
+        if 'notes' in payload:
+            p.notes = (payload['notes'] or '').strip()
+        if 'date_of_birth' in payload:
+            from django.utils.dateparse import parse_date as _pd
+            p.date_of_birth = _pd(payload['date_of_birth'] or '') if payload['date_of_birth'] else None
+        p.save()
+        return JsonResponse({'patient': _patient_to_dict(p)})
+
+    if request.method == 'DELETE':
+        p.delete()
+        return JsonResponse({'detail': 'Deleted'}, status=204)
+
+    return JsonResponse({'detail': 'Method not allowed'}, status=405)
+
+
+# ─── Doctors (Users with role=DOCTOR) ────────────────────────────────
+
+def _doctor_to_dict(u):
+    return {
+        'id': u.id,
+        'first_name': u.first_name or '',
+        'last_name': u.last_name or '',
+        'email': u.email,
+        'is_active': u.is_active,
+    }
+
+
+@csrf_exempt
+def admin_doctors(request):
+    user, err = _require_admin(request)
+    if err:
+        return err
+
+    from users.models import User as _User
+
+    if request.method == 'GET':
+        search = request.GET.get('search', '').strip()
+        qs = _User.objects.filter(role=_User.Role.DOCTOR).order_by('last_name', 'first_name', 'email')
+        if search:
+            from django.db.models import Q
+            qs = qs.filter(
+                Q(first_name__icontains=search) | Q(last_name__icontains=search) |
+                Q(email__icontains=search)
+            )
+        return JsonResponse({'doctors': [_doctor_to_dict(u) for u in qs]})
+
+    if request.method == 'POST':
+        try:
+            payload = json.loads(request.body.decode('utf-8') or '{}')
+        except json.JSONDecodeError:
+            return JsonResponse({'detail': 'Invalid JSON'}, status=400)
+        email = (payload.get('email') or '').strip()
+        password = (payload.get('password') or '').strip()
+        if not email or not password:
+            return JsonResponse({'detail': 'email and password required'}, status=400)
+        if _User.objects.filter(email=email).exists():
+            return JsonResponse({'detail': 'Email already in use'}, status=400)
+        doc = _User.objects.create_user(
+            email=email,
+            password=password,
+            first_name=(payload.get('first_name') or '').strip(),
+            last_name=(payload.get('last_name') or '').strip(),
+            role=_User.Role.DOCTOR,
+        )
+        return JsonResponse({'doctor': _doctor_to_dict(doc)}, status=201)
+
+    return JsonResponse({'detail': 'Method not allowed'}, status=405)
+
+
+@csrf_exempt
+def admin_doctor_detail(request, doctor_id):
+    user, err = _require_admin(request)
+    if err:
+        return err
+
+    from users.models import User as _User
+    try:
+        doc = _User.objects.get(id=doctor_id, role=_User.Role.DOCTOR)
+    except _User.DoesNotExist:
+        return JsonResponse({'detail': 'Not found'}, status=404)
+
+    if request.method == 'GET':
+        return JsonResponse({'doctor': _doctor_to_dict(doc)})
+
+    if request.method == 'PUT':
+        try:
+            payload = json.loads(request.body.decode('utf-8') or '{}')
+        except json.JSONDecodeError:
+            return JsonResponse({'detail': 'Invalid JSON'}, status=400)
+        if 'first_name' in payload:
+            doc.first_name = (payload['first_name'] or '').strip()
+        if 'last_name' in payload:
+            doc.last_name = (payload['last_name'] or '').strip()
+        if 'email' in payload:
+            new_email = (payload['email'] or '').strip()
+            if new_email and new_email != doc.email:
+                if _User.objects.filter(email=new_email).exists():
+                    return JsonResponse({'detail': 'Email already in use'}, status=400)
+                doc.email = new_email
+        if 'is_active' in payload:
+            doc.is_active = bool(payload['is_active'])
+        if payload.get('password'):
+            doc.set_password(payload['password'].strip())
+        doc.save()
+        return JsonResponse({'doctor': _doctor_to_dict(doc)})
+
+    if request.method == 'DELETE':
+        doc.delete()
+        return JsonResponse({'detail': 'Deleted'}, status=204)
 
     return JsonResponse({'detail': 'Method not allowed'}, status=405)
