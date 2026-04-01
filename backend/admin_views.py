@@ -298,7 +298,7 @@ def admin_appointments(request):
         qs = (
             Appointment.objects
             .select_related('patient', 'treatment', 'doctor')
-            .order_by('-starts_at')
+            .order_by('starts_at')
         )
         status_filter = request.GET.get('status')
         if status_filter:
