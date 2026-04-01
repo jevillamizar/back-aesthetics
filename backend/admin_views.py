@@ -393,6 +393,12 @@ def admin_appointment_detail(request, appointment_id):
         except json.JSONDecodeError:
             return JsonResponse({'detail': 'Invalid JSON'}, status=400)
 
+        if a.status == Appointment.Status.CONFIRMED and set(payload.keys()) - {'status'}:
+            return JsonResponse(
+                {'detail': 'No se puede editar una cita confirmada.'},
+                status=400,
+            )
+
         from django.utils.dateparse import parse_datetime as _pdt
         from django.utils.timezone import is_naive, make_aware
 
