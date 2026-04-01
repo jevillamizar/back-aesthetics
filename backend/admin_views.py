@@ -1,9 +1,13 @@
 import json
+from datetime import date, datetime
 
 from django.http import JsonResponse
+from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 
+from appointments.models import Appointment
 from landing.models import ClinicLanding
+from patients.models import Patient
 from treatments.models import Treatment
 from .auth_views import get_auth_user
 
@@ -201,3 +205,64 @@ def admin_treatment_detail(request, treatment_id):
         return JsonResponse({'detail': 'Deleted'}, status=204)
 
     return JsonResponse({'detail': 'Method not allowed'}, status=405)
+
+
+# ─── Dashboard ───────────────────────────────────────────────────────
+
+@csrf_exempt
+def admin_dashboard(request):
+    user, err = _require_admin(request)
+    if err:
+        return err
+
+    if request.method != 'GET':
+        return JsonResponse({'detail': 'Method not allowed'}, status=405)
+
+    now = timezone.now()
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_end = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+    appointments_today = Appointment.objects.filter(
+        starts_at__gte=today_start,
+        starts_at__lte=today_end,
+    ).exclude(status=Appointment.Status.CANCELED).count()
+
+    appointments_month = Appointment.objects.filter(
+        starts_at__gte=month_start,
+    ).exclude(status=Appointment.Status.CANCELED).count()
+
+    patients_total = Patient.objects.count()
+    treatments_active = Treatment.objects.filter(is_active=True).count()
+
+    upcoming = (
+        Appointment.objects
+        .select_related('patient', 'treatment', 'doctor')
+        .filter(starts_at__gte=now)
+        .exclude(status=Appointment.Status.CANCELED)
+        .order_by('starts_at')[:8]
+    )
+
+    upcoming_list = []
+    for a in upcoming:
+        upcoming_list.append({
+            'id': a.id,
+            'starts_at': a.starts_at.isoformat(),
+            'ends_at': a.ends_at.isoformat(),
+            'status': a.status,
+            'patient_name': f"{a.patient.first_name} {a.patient.last_name}".strip() if a.patient else '—',
+            'patient_email': a.patient.email if a.patient else '',
+            'treatment_name': a.treatment.name if a.treatment else '—',
+            'doctor_email': a.doctor.email if a.doctor else None,
+            'notes': a.notes or '',
+        })
+
+    return JsonResponse({
+        'stats': {
+            'appointments_today': appointments_today,
+            'appointments_month': appointments_month,
+            'patients_total': patients_total,
+            'treatments_active': treatments_active,
+        },
+        'upcoming_appointments': upcoming_list,
+    })
