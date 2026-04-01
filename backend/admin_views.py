@@ -218,6 +218,7 @@ def admin_dashboard(request):
     if request.method != 'GET':
         return JsonResponse({'detail': 'Method not allowed'}, status=405)
 
+    _auto_no_show()
     now = timezone.now()
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     today_end = now.replace(hour=23, minute=59, second=59, microsecond=999999)
@@ -274,6 +275,15 @@ def admin_dashboard(request):
 
 # ─── Appointments ────────────────────────────────────────────────────
 
+def _auto_no_show():
+    from django.utils import timezone as _tz
+    _now = _tz.now()
+    Appointment.objects.filter(
+        starts_at__lt=_now,
+        status=Appointment.Status.SCHEDULED,
+    ).update(status=Appointment.Status.NO_SHOW)
+
+
 def _appointment_to_dict(a):
     return {
         'id': a.id,
@@ -299,6 +309,7 @@ def admin_appointments(request):
         return err
 
     if request.method == 'GET':
+        _auto_no_show()
         qs = (
             Appointment.objects
             .select_related('patient', 'treatment', 'doctor')
@@ -404,8 +415,9 @@ def admin_appointment_detail(request, appointment_id):
         except json.JSONDecodeError:
             return JsonResponse({'detail': 'Invalid JSON'}, status=400)
 
-        ALLOWED_ON_CONFIRMED = {'status', 'notes'}
-        if a.status == Appointment.Status.CONFIRMED and set(payload.keys()) - ALLOWED_ON_CONFIRMED:
+        LOCKED_STATUSES = {Appointment.Status.CONFIRMED, Appointment.Status.COMPLETED}
+        ALLOWED_ON_LOCKED = {'status', 'notes'}
+        if a.status in LOCKED_STATUSES and set(payload.keys()) - ALLOWED_ON_LOCKED:
             return JsonResponse(
                 {'detail': 'No se puede editar una cita confirmada.'},
                 status=400,
