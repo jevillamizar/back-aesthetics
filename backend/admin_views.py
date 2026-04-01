@@ -316,6 +316,13 @@ def admin_appointments(request):
         patient_filter = request.GET.get('patient_id')
         if patient_filter:
             qs = qs.filter(patient_id=patient_filter)
+        if request.GET.get('past') == '1':
+            qs = (
+                Appointment.objects
+                .select_related('patient', 'treatment', 'doctor')
+                .filter(status__in=['COMPLETED', 'CANCELED', 'NO_SHOW'])
+                .order_by('-starts_at')
+            )
         return JsonResponse({'appointments': [_appointment_to_dict(a) for a in qs]})
 
     if request.method == 'POST':
