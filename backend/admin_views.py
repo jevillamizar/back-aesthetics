@@ -235,15 +235,16 @@ def admin_dashboard(request):
     patients_total = Patient.objects.count()
     treatments_active = Treatment.objects.filter(is_active=True).count()
 
-    from datetime import timedelta
-    five_days_later = now + timedelta(days=5)
+    import calendar as _cal
+    last_day = _cal.monthrange(now.year, now.month)[1]
+    month_end = now.replace(day=last_day, hour=23, minute=59, second=59, microsecond=999999)
 
     upcoming = (
         Appointment.objects
         .select_related('patient', 'treatment', 'doctor')
-        .filter(starts_at__gte=now, starts_at__lte=five_days_later)
+        .filter(starts_at__gte=month_start, starts_at__lte=month_end)
         .exclude(status=Appointment.Status.CANCELED)
-        .order_by('starts_at')[:8]
+        .order_by('starts_at')
     )
 
     upcoming_list = []
