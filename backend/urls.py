@@ -19,7 +19,12 @@ from django.conf.urls.static import static
 from django.contrib import admin
 from django.urls import path
 
-from .admin_views import admin_dashboard, admin_landing, admin_treatment_detail, admin_treatments
+from .admin_views import (
+    admin_appointment_detail, admin_appointments,
+    admin_dashboard, admin_landing,
+    admin_patients,
+    admin_treatment_detail, admin_treatments,
+)
 from .auth_views import auth_login, auth_me
 from .views import public_create_appointment, public_landing, public_treatments, tenant_debug
 
@@ -35,6 +40,9 @@ urlpatterns = [
     path('api/treatments/', admin_treatments),
     path('api/treatments/<int:treatment_id>/', admin_treatment_detail),
     path('api/dashboard/', admin_dashboard),
+    path('api/appointments/', admin_appointments),
+    path('api/appointments/<int:appointment_id>/', admin_appointment_detail),
+    path('api/patients/', admin_patients),
 ]
 
 

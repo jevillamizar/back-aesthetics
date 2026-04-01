@@ -266,3 +266,179 @@ def admin_dashboard(request):
         },
         'upcoming_appointments': upcoming_list,
     })
+
+
+# ─── Appointments ────────────────────────────────────────────────────
+
+def _appointment_to_dict(a):
+    return {
+        'id': a.id,
+        'starts_at': a.starts_at.isoformat(),
+        'ends_at': a.ends_at.isoformat(),
+        'status': a.status,
+        'notes': a.notes or '',
+        'patient_id': a.patient_id,
+        'patient_name': f"{a.patient.first_name} {a.patient.last_name}".strip() if a.patient else '—',
+        'patient_email': a.patient.email if a.patient else '',
+        'patient_phone': a.patient.phone if a.patient else '',
+        'treatment_id': a.treatment_id,
+        'treatment_name': a.treatment.name if a.treatment else None,
+        'doctor_id': a.doctor_id,
+        'doctor_email': a.doctor.email if a.doctor else None,
+    }
+
+
+@csrf_exempt
+def admin_appointments(request):
+    user, err = _require_admin(request)
+    if err:
+        return err
+
+    if request.method == 'GET':
+        qs = (
+            Appointment.objects
+            .select_related('patient', 'treatment', 'doctor')
+            .order_by('-starts_at')
+        )
+        status_filter = request.GET.get('status')
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+        date_filter = request.GET.get('date')
+        if date_filter:
+            from django.utils.dateparse import parse_date as _pd
+            d = _pd(date_filter)
+            if d:
+                qs = qs.filter(starts_at__date=d)
+        return JsonResponse({'appointments': [_appointment_to_dict(a) for a in qs]})
+
+    if request.method == 'POST':
+        try:
+            payload = json.loads(request.body.decode('utf-8') or '{}')
+        except json.JSONDecodeError:
+            return JsonResponse({'detail': 'Invalid JSON'}, status=400)
+
+        from django.utils.dateparse import parse_datetime as _pdt
+        from django.utils.timezone import is_naive, make_aware
+
+        starts_at = _pdt(payload.get('starts_at') or '')
+        ends_at = _pdt(payload.get('ends_at') or '')
+        if not starts_at or not ends_at:
+            return JsonResponse({'detail': 'starts_at and ends_at required (ISO-8601)'}, status=400)
+        if is_naive(starts_at):
+            starts_at = make_aware(starts_at)
+        if is_naive(ends_at):
+            ends_at = make_aware(ends_at)
+
+        patient_id = payload.get('patient_id')
+        if not patient_id:
+            return JsonResponse({'detail': 'patient_id required'}, status=400)
+        try:
+            patient = Patient.objects.get(id=patient_id)
+        except Patient.DoesNotExist:
+            return JsonResponse({'detail': 'patient not found'}, status=400)
+
+        treatment = None
+        if payload.get('treatment_id'):
+            try:
+                treatment = Treatment.objects.get(id=payload['treatment_id'])
+            except Treatment.DoesNotExist:
+                return JsonResponse({'detail': 'treatment not found'}, status=400)
+
+        from users.models import User
+        doctor = None
+        if payload.get('doctor_id'):
+            try:
+                doctor = User.objects.get(id=payload['doctor_id'])
+            except User.DoesNotExist:
+                pass
+
+        a = Appointment.objects.create(
+            patient=patient,
+            treatment=treatment,
+            doctor=doctor,
+            starts_at=starts_at,
+            ends_at=ends_at,
+            status=payload.get('status') or Appointment.Status.SCHEDULED,
+            notes=(payload.get('notes') or '').strip(),
+        )
+        a.refresh_from_db()
+        a.patient = patient
+        a.treatment = treatment
+        a.doctor = doctor
+        return JsonResponse({'appointment': _appointment_to_dict(a)}, status=201)
+
+    return JsonResponse({'detail': 'Method not allowed'}, status=405)
+
+
+@csrf_exempt
+def admin_appointment_detail(request, appointment_id):
+    user, err = _require_admin(request)
+    if err:
+        return err
+
+    try:
+        a = Appointment.objects.select_related('patient', 'treatment', 'doctor').get(id=appointment_id)
+    except Appointment.DoesNotExist:
+        return JsonResponse({'detail': 'Not found'}, status=404)
+
+    if request.method == 'GET':
+        return JsonResponse({'appointment': _appointment_to_dict(a)})
+
+    if request.method == 'PUT':
+        try:
+            payload = json.loads(request.body.decode('utf-8') or '{}')
+        except json.JSONDecodeError:
+            return JsonResponse({'detail': 'Invalid JSON'}, status=400)
+
+        from django.utils.dateparse import parse_datetime as _pdt
+        from django.utils.timezone import is_naive, make_aware
+
+        if 'starts_at' in payload:
+            dt = _pdt(payload['starts_at'] or '')
+            if dt:
+                a.starts_at = make_aware(dt) if is_naive(dt) else dt
+        if 'ends_at' in payload:
+            dt = _pdt(payload['ends_at'] or '')
+            if dt:
+                a.ends_at = make_aware(dt) if is_naive(dt) else dt
+        if 'status' in payload:
+            a.status = payload['status']
+        if 'notes' in payload:
+            a.notes = (payload['notes'] or '').strip()
+        if 'treatment_id' in payload:
+            try:
+                a.treatment = Treatment.objects.get(id=payload['treatment_id']) if payload['treatment_id'] else None
+            except Treatment.DoesNotExist:
+                return JsonResponse({'detail': 'treatment not found'}, status=400)
+        if 'patient_id' in payload:
+            try:
+                a.patient = Patient.objects.get(id=payload['patient_id'])
+            except Patient.DoesNotExist:
+                return JsonResponse({'detail': 'patient not found'}, status=400)
+        a.save()
+        a.refresh_from_db()
+        a = Appointment.objects.select_related('patient', 'treatment', 'doctor').get(id=appointment_id)
+        return JsonResponse({'appointment': _appointment_to_dict(a)})
+
+    if request.method == 'DELETE':
+        a.delete()
+        return JsonResponse({'detail': 'Deleted'}, status=204)
+
+    return JsonResponse({'detail': 'Method not allowed'}, status=405)
+
+
+# ─── Patients (for dropdowns) ────────────────────────────────────────
+
+@csrf_exempt
+def admin_patients(request):
+    user, err = _require_admin(request)
+    if err:
+        return err
+
+    if request.method == 'GET':
+        qs = Patient.objects.order_by('last_name', 'first_name').values(
+            'id', 'first_name', 'last_name', 'email', 'phone', 'date_of_birth', 'notes'
+        )
+        return JsonResponse({'patients': list(qs)})
+
+    return JsonResponse({'detail': 'Method not allowed'}, status=405)
