@@ -43,7 +43,7 @@ SHARED_APPS = [
     'django_tenants',
     'clinics',
     'users',
-    'django.contrib.admin',
+    'backend.tenant_admin.TenantAdminConfig',
     'django.contrib.auth',
     'django.contrib.contenttypes',
     'django.contrib.sessions',
@@ -53,7 +53,7 @@ SHARED_APPS = [
 
 # Apps specific to each tenant (tenant schemas)
 TENANT_APPS = [
-    'django.contrib.admin',
+    'backend.tenant_admin.TenantAdminConfig',
     'django.contrib.auth',
     'django.contrib.contenttypes',
     'django.contrib.sessions',
@@ -76,6 +76,7 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'backend.tenant_permissions.TenantPermissionMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
@@ -129,6 +130,11 @@ DATABASE_ROUTERS = [
 
 # Password validation
 # https://docs.djangoproject.com/en/6.0/ref/settings/#auth-password-validators
+
+AUTHENTICATION_BACKENDS = [
+    'backend.tenant_permissions.TenantAuthBackend',
+    'django.contrib.auth.backends.ModelBackend',
+]
 
 AUTH_PASSWORD_VALIDATORS = [
     {
