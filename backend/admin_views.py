@@ -309,6 +309,9 @@ def admin_appointments(request):
             d = _pd(date_filter)
             if d:
                 qs = qs.filter(starts_at__date=d)
+        patient_filter = request.GET.get('patient_id')
+        if patient_filter:
+            qs = qs.filter(patient_id=patient_filter)
         return JsonResponse({'appointments': [_appointment_to_dict(a) for a in qs]})
 
     if request.method == 'POST':
