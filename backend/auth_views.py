@@ -21,7 +21,7 @@ def _user_from_token(token: str):
     except (signing.BadSignature, signing.SignatureExpired):
         return None
     try:
-        return User.objects.select_related('clinic').get(pk=data['uid'], is_active=True)
+        return User.objects.get(pk=data['uid'], is_active=True)
     except User.DoesNotExist:
         return None
 
@@ -41,11 +41,6 @@ def _user_payload(user: User) -> dict:
         'first_name': user.first_name,
         'last_name': user.last_name,
         'role': user.role,
-        'clinic': {
-            'id': user.clinic.id,
-            'name': user.clinic.name,
-            'slug': user.clinic.slug,
-        } if user.clinic else None,
     }
 
 
