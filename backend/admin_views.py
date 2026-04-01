@@ -15,8 +15,6 @@ def _require_admin(request):
         return None, JsonResponse({'detail': 'Not authenticated'}, status=401)
     if user.role not in ('ADMIN',):
         return None, JsonResponse({'detail': 'Forbidden'}, status=403)
-    if user.clinic is None:
-        return None, JsonResponse({'detail': 'No clinic assigned'}, status=400)
     return user, None
 
 
@@ -68,7 +66,7 @@ def admin_landing(request):
     if err:
         return err
 
-    landing, _ = ClinicLanding.objects.get_or_create(clinic=user.clinic)
+    landing, _ = ClinicLanding.objects.get_or_create(defaults={})
 
     if request.method == 'GET':
         return JsonResponse({'landing': _landing_to_dict(landing, request)})
@@ -139,7 +137,7 @@ def admin_treatments(request):
         return err
 
     if request.method == 'GET':
-        qs = Treatment.objects.filter(clinic=user.clinic).order_by('category', 'name')
+        qs = Treatment.objects.order_by('category', 'name')
         return JsonResponse({'treatments': [_treatment_to_dict(t) for t in qs]})
 
     if request.method == 'POST':
@@ -153,7 +151,6 @@ def admin_treatments(request):
             return JsonResponse({'detail': 'name is required'}, status=400)
 
         t = Treatment.objects.create(
-            clinic=user.clinic,
             name=name,
             slug=payload.get('slug', '').strip() or None,
             category=payload.get('category', '').strip(),
@@ -174,7 +171,7 @@ def admin_treatment_detail(request, treatment_id):
         return err
 
     try:
-        t = Treatment.objects.get(id=treatment_id, clinic=user.clinic)
+        t = Treatment.objects.get(id=treatment_id)
     except Treatment.DoesNotExist:
         return JsonResponse({'detail': 'Not found'}, status=404)
 

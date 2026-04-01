@@ -38,15 +38,27 @@ AUTH_USER_MODEL = 'users.User'
 
 # Application definition
 
-INSTALLED_APPS = [
+# Apps shared across all tenants (public schema)
+SHARED_APPS = [
+    'django_tenants',
+    'clinics',
+    'users',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'clinics',
-    'users',
+]
+
+# Apps specific to each tenant (tenant schemas)
+TENANT_APPS = [
+    'django.contrib.admin',
+    'django.contrib.auth',
+    'django.contrib.contenttypes',
+    'django.contrib.sessions',
+    'django.contrib.messages',
+    'django.contrib.staticfiles',
     'patients',
     'appointments',
     'medical_records',
@@ -54,12 +66,14 @@ INSTALLED_APPS = [
     'landing',
 ]
 
+INSTALLED_APPS = list(set(SHARED_APPS + TENANT_APPS))
+
 MIDDLEWARE = [
+    'django_tenants.middleware.main.TenantMainMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'backend.cors.PublicCORSMiddleware',
     'django.middleware.common.CommonMiddleware',
-    'clinics.middleware.TenantMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
@@ -67,7 +81,12 @@ MIDDLEWARE = [
 ]
 
 
+# django-tenants configuration
+TENANT_MODEL = 'clinics.Clinic'
+TENANT_DOMAIN_MODEL = 'clinics.Domain'
 TENANT_BASE_DOMAIN = os.environ.get('TENANT_BASE_DOMAIN', 'lvh.me')
+PUBLIC_SCHEMA_NAME = 'public'
+PUBLIC_SCHEMA_URLCONF = 'backend.urls_public'
 
 ROOT_URLCONF = 'backend.urls'
 
@@ -94,7 +113,7 @@ WSGI_APPLICATION = 'backend.wsgi.application'
 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.postgresql',
+        'ENGINE': 'django_tenants.postgresql_backend',
         'NAME': os.environ.get('POSTGRES_DB', 'app_db'),
         'USER': os.environ.get('POSTGRES_USER', 'app'),
         'PASSWORD': os.environ.get('POSTGRES_PASSWORD', 'app_password'),
@@ -102,6 +121,10 @@ DATABASES = {
         'PORT': os.environ.get('POSTGRES_PORT', '5432'),
     }
 }
+
+DATABASE_ROUTERS = [
+    'django_tenants.routers.TenantSyncRouter',
+]
 
 
 # Password validation

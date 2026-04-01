@@ -2,8 +2,6 @@ from django.db import models
 
 
 class Treatment(models.Model):
-    clinic = models.ForeignKey('clinics.Clinic', on_delete=models.PROTECT, related_name='treatments')
-
     name = models.CharField(max_length=255)
     slug = models.SlugField(max_length=255, null=True, blank=True)
     category = models.CharField(max_length=100, blank=True, help_text='Grouping label shown as tab in the landing, e.g. "Tratamientos Faciales"')
@@ -19,11 +17,11 @@ class Treatment(models.Model):
         verbose_name = 'Treatment'
         verbose_name_plural = 'Treatments'
         constraints = [
-            models.UniqueConstraint(fields=['clinic', 'slug'], name='uniq_treatment_slug_per_clinic'),
+            models.UniqueConstraint(fields=['slug'], name='uniq_treatment_slug'),
         ]
         indexes = [
-            models.Index(fields=['clinic', 'name']),
-            models.Index(fields=['clinic', 'slug']),
+            models.Index(fields=['name']),
+            models.Index(fields=['slug']),
         ]
 
     def __str__(self) -> str:

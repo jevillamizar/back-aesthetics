@@ -2,7 +2,6 @@ from django.db import models
 
 
 class MedicalRecord(models.Model):
-    clinic = models.ForeignKey('clinics.Clinic', on_delete=models.PROTECT, related_name='medical_records')
     patient = models.ForeignKey('patients.Patient', on_delete=models.PROTECT, related_name='medical_records')
     doctor = models.ForeignKey('users.User', on_delete=models.PROTECT, related_name='medical_records')
     appointment = models.OneToOneField(
@@ -31,7 +30,7 @@ class MedicalRecord(models.Model):
         verbose_name = 'Medical Record'
         verbose_name_plural = 'Medical Records'
         indexes = [
-            models.Index(fields=['clinic', 'patient', 'created_at']),
+            models.Index(fields=['patient', 'created_at']),
         ]
 
     def __str__(self) -> str:
@@ -39,7 +38,6 @@ class MedicalRecord(models.Model):
 
 
 class MedicalRecordTreatment(models.Model):
-    clinic = models.ForeignKey('clinics.Clinic', on_delete=models.PROTECT, related_name='medical_record_treatments')
     medical_record = models.ForeignKey('medical_records.MedicalRecord', on_delete=models.CASCADE, related_name='treatment_items')
     treatment = models.ForeignKey('treatments.Treatment', on_delete=models.PROTECT, related_name='medical_record_treatments')
 
@@ -53,8 +51,8 @@ class MedicalRecordTreatment(models.Model):
         verbose_name = 'Medical Record Treatment'
         verbose_name_plural = 'Medical Record Treatments'
         indexes = [
-            models.Index(fields=['clinic', 'medical_record']),
-            models.Index(fields=['clinic', 'treatment']),
+            models.Index(fields=['medical_record']),
+            models.Index(fields=['treatment']),
         ]
 
     def __str__(self) -> str:

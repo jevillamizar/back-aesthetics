@@ -35,10 +35,6 @@ def public_create_appointment(request):
     if request.method != 'POST':
         return JsonResponse({'detail': 'Method not allowed'}, status=405)
 
-    clinic = getattr(request, 'clinic', None)
-    if clinic is None:
-        return JsonResponse({'detail': 'Clinic not resolved from host'}, status=400)
-
     try:
         payload = json.loads(request.body.decode('utf-8') or '{}')
     except json.JSONDecodeError:
@@ -78,7 +74,6 @@ def public_create_appointment(request):
     patient = None
     if email:
         patient, _ = Patient.objects.get_or_create(
-            clinic=clinic,
             email=email,
             defaults={
                 'first_name': first_name,
@@ -90,7 +85,6 @@ def public_create_appointment(request):
     elif phone:
         patient = (
             Patient.objects.filter(
-                clinic=clinic,
                 phone=phone,
                 first_name=first_name,
                 last_name=last_name,
@@ -101,7 +95,6 @@ def public_create_appointment(request):
 
     if patient is None:
         patient = Patient.objects.create(
-            clinic=clinic,
             first_name=first_name,
             last_name=last_name,
             phone=phone,
@@ -114,17 +107,16 @@ def public_create_appointment(request):
     treatment = None
     if treatment_id is not None:
         try:
-            treatment = Treatment.objects.get(id=treatment_id, clinic=clinic)
+            treatment = Treatment.objects.get(id=treatment_id)
         except Treatment.DoesNotExist:
-            return JsonResponse({'detail': 'treatment_id not found for this clinic'}, status=400)
+            return JsonResponse({'detail': 'treatment_id not found'}, status=400)
     elif treatment_slug:
         try:
-            treatment = Treatment.objects.get(clinic=clinic, slug=treatment_slug)
+            treatment = Treatment.objects.get(slug=treatment_slug)
         except Treatment.DoesNotExist:
-            return JsonResponse({'detail': 'treatment_slug not found for this clinic'}, status=400)
+            return JsonResponse({'detail': 'treatment_slug not found'}, status=400)
 
     appointment = Appointment.objects.create(
-        clinic=clinic,
         patient=patient,
         doctor=None,
         treatment=treatment,
@@ -137,7 +129,6 @@ def public_create_appointment(request):
     return JsonResponse(
         {
             'id': appointment.id,
-            'clinic_id': clinic.id,
             'patient_id': patient.id,
             'doctor_id': appointment.doctor_id,
             'treatment_id': appointment.treatment_id,
@@ -153,12 +144,8 @@ def public_treatments(request):
     if request.method != 'GET':
         return JsonResponse({'detail': 'Method not allowed'}, status=405)
 
-    clinic = getattr(request, 'clinic', None)
-    if clinic is None:
-        return JsonResponse({'detail': 'Clinic not resolved from host'}, status=400)
-
     treatments = (
-        Treatment.objects.filter(clinic=clinic, is_active=True)
+        Treatment.objects.filter(is_active=True)
         .order_by('category', 'name')
         .values('id', 'name', 'slug', 'category', 'description', 'duration_minutes', 'price')
     )
@@ -170,13 +157,8 @@ def public_landing(request):
     if request.method != 'GET':
         return JsonResponse({'detail': 'Method not allowed'}, status=405)
 
-    clinic = getattr(request, 'clinic', None)
-    if clinic is None:
-        return JsonResponse({'detail': 'Clinic not resolved from host'}, status=400)
-
     landing = (
-        ClinicLanding.objects.filter(clinic=clinic)
-        .order_by('-updated_at')
+        ClinicLanding.objects.order_by('-updated_at')
         .first()
     )
 
@@ -205,11 +187,6 @@ def public_landing(request):
 
     return JsonResponse(
         {
-            'clinic': {
-                'id': clinic.id,
-                'name': clinic.name,
-                'slug': clinic.slug,
-            },
             'landing': (
                 None
                 if landing is None

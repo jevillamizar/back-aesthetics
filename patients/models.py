@@ -2,7 +2,6 @@ from django.db import models
 
 
 class Patient(models.Model):
-    clinic = models.ForeignKey('clinics.Clinic', on_delete=models.PROTECT, related_name='patients')
     first_name = models.CharField(max_length=150)
     last_name = models.CharField(max_length=150)
     date_of_birth = models.DateField(null=True, blank=True)
@@ -16,7 +15,7 @@ class Patient(models.Model):
         verbose_name = 'Patient'
         verbose_name_plural = 'Patients'
         indexes = [
-            models.Index(fields=['clinic', 'last_name', 'first_name']),
+            models.Index(fields=['last_name', 'first_name']),
         ]
 
     def __str__(self) -> str:

@@ -9,7 +9,6 @@ class Appointment(models.Model):
         CANCELED = 'CANCELED', 'Canceled'
         NO_SHOW = 'NO_SHOW', 'No show'
 
-    clinic = models.ForeignKey('clinics.Clinic', on_delete=models.PROTECT, related_name='appointments')
     patient = models.ForeignKey('patients.Patient', on_delete=models.PROTECT, related_name='appointments')
     doctor = models.ForeignKey(
         'users.User',
@@ -38,10 +37,10 @@ class Appointment(models.Model):
         verbose_name = 'Appointment'
         verbose_name_plural = 'Appointments'
         indexes = [
-            models.Index(fields=['clinic', 'starts_at']),
-            models.Index(fields=['clinic', 'doctor', 'starts_at']),
-            models.Index(fields=['clinic', 'patient', 'starts_at']),
-            models.Index(fields=['clinic', 'treatment', 'starts_at']),
+            models.Index(fields=['starts_at']),
+            models.Index(fields=['doctor', 'starts_at']),
+            models.Index(fields=['patient', 'starts_at']),
+            models.Index(fields=['treatment', 'starts_at']),
         ]
 
     def __str__(self) -> str:

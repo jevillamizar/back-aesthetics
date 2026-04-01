@@ -2,8 +2,6 @@ from django.db import models
 
 
 class ClinicLanding(models.Model):
-    clinic = models.OneToOneField('clinics.Clinic', on_delete=models.PROTECT, related_name='landing')
-
     headline = models.CharField(max_length=255, blank=True)
     description = models.TextField(blank=True)
 
@@ -59,4 +57,4 @@ class ClinicLanding(models.Model):
         verbose_name_plural = 'Clinic Landings'
 
     def __str__(self) -> str:
-        return f"Landing - {self.clinic}"
+        return f"Landing - {self.headline or 'Untitled'}"
