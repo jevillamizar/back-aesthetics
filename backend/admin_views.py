@@ -404,7 +404,8 @@ def admin_appointment_detail(request, appointment_id):
         except json.JSONDecodeError:
             return JsonResponse({'detail': 'Invalid JSON'}, status=400)
 
-        if a.status == Appointment.Status.CONFIRMED and set(payload.keys()) - {'status'}:
+        ALLOWED_ON_CONFIRMED = {'status', 'notes'}
+        if a.status == Appointment.Status.CONFIRMED and set(payload.keys()) - ALLOWED_ON_CONFIRMED:
             return JsonResponse(
                 {'detail': 'No se puede editar una cita confirmada.'},
                 status=400,
