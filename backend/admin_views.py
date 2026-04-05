@@ -480,11 +480,15 @@ def admin_appointment_detail(request, appointment_id):
 def _patient_to_dict(p):
     return {
         'id': p.id,
+        'document_type': p.document_type or '',
+        'document_number': p.document_number or '',
         'first_name': p.first_name,
         'last_name': p.last_name,
-        'email': p.email or '',
-        'phone': p.phone or '',
         'date_of_birth': p.date_of_birth.isoformat() if p.date_of_birth else None,
+        'sex': p.sex or '',
+        'phone': p.phone or '',
+        'email': p.email or '',
+        'address': p.address or '',
         'notes': p.notes or '',
     }
 
@@ -518,11 +522,15 @@ def admin_patients(request):
         from django.utils.dateparse import parse_date as _pd
         dob = _pd(payload.get('date_of_birth') or '') if payload.get('date_of_birth') else None
         p = Patient.objects.create(
+            document_type=(payload.get('document_type') or '').strip(),
+            document_number=(payload.get('document_number') or '').strip(),
             first_name=first,
             last_name=last,
-            email=(payload.get('email') or '').strip(),
-            phone=(payload.get('phone') or '').strip(),
             date_of_birth=dob,
+            sex=(payload.get('sex') or '').strip(),
+            phone=(payload.get('phone') or '').strip(),
+            email=(payload.get('email') or '').strip(),
+            address=(payload.get('address') or '').strip(),
             notes=(payload.get('notes') or '').strip(),
         )
         return JsonResponse({'patient': _patient_to_dict(p)}, status=201)
@@ -548,19 +556,27 @@ def admin_patient_detail(request, patient_id):
             payload = json.loads(request.body.decode('utf-8') or '{}')
         except json.JSONDecodeError:
             return JsonResponse({'detail': 'Invalid JSON'}, status=400)
+        if 'document_type' in payload:
+            p.document_type = (payload['document_type'] or '').strip()
+        if 'document_number' in payload:
+            p.document_number = (payload['document_number'] or '').strip()
         if 'first_name' in payload:
             p.first_name = (payload['first_name'] or '').strip()
         if 'last_name' in payload:
             p.last_name = (payload['last_name'] or '').strip()
-        if 'email' in payload:
-            p.email = (payload['email'] or '').strip()
-        if 'phone' in payload:
-            p.phone = (payload['phone'] or '').strip()
-        if 'notes' in payload:
-            p.notes = (payload['notes'] or '').strip()
         if 'date_of_birth' in payload:
             from django.utils.dateparse import parse_date as _pd
             p.date_of_birth = _pd(payload['date_of_birth'] or '') if payload['date_of_birth'] else None
+        if 'sex' in payload:
+            p.sex = (payload['sex'] or '').strip()
+        if 'phone' in payload:
+            p.phone = (payload['phone'] or '').strip()
+        if 'email' in payload:
+            p.email = (payload['email'] or '').strip()
+        if 'address' in payload:
+            p.address = (payload['address'] or '').strip()
+        if 'notes' in payload:
+            p.notes = (payload['notes'] or '').strip()
         p.save()
         return JsonResponse({'patient': _patient_to_dict(p)})
 
