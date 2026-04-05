@@ -54,6 +54,33 @@ class MedicalRecord(models.Model):
         return f"{self.patient} - {self.created_at}"
 
 
+class Consent(models.Model):
+    patient        = models.ForeignKey('patients.Patient', on_delete=models.PROTECT, related_name='consents')
+    doctor         = models.ForeignKey('users.User', on_delete=models.SET_NULL, null=True, blank=True, related_name='consents')
+    medical_record = models.ForeignKey('medical_records.MedicalRecord', on_delete=models.SET_NULL, null=True, blank=True, related_name='consents')
+
+    procedure_description = models.TextField(blank=True)
+    risks                 = models.TextField(blank=True)
+    notes                 = models.TextField(blank=True)
+
+    signed_by_name  = models.CharField(max_length=255, blank=True)
+    signed_at       = models.DateTimeField(null=True, blank=True)
+    signature_image = models.TextField(blank=True)  # base64 data URL from canvas
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Consent'
+        verbose_name_plural = 'Consents'
+        indexes = [
+            models.Index(fields=['patient', 'created_at']),
+        ]
+
+    def __str__(self) -> str:
+        return f"Consentimiento – {self.patient} ({self.created_at:%Y-%m-%d})"
+
+
 class MedicalRecordTreatment(models.Model):
     medical_record = models.ForeignKey('medical_records.MedicalRecord', on_delete=models.CASCADE, related_name='treatment_items')
     treatment = models.ForeignKey('treatments.Treatment', on_delete=models.PROTECT, related_name='medical_record_treatments')

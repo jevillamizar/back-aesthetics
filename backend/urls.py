@@ -21,6 +21,7 @@ from django.urls import path
 
 from .admin_views import (
     admin_appointment_detail, admin_appointments,
+    admin_consent_detail, admin_consents,
     admin_dashboard, admin_landing,
     admin_doctor_detail, admin_doctors,
     admin_medical_record_detail, admin_medical_records,
@@ -52,6 +53,8 @@ urlpatterns = [
     path('api/revenue/', admin_revenue),
     path('api/medical-records/', admin_medical_records),
     path('api/medical-records/<int:record_id>/', admin_medical_record_detail),
+    path('api/consents/', admin_consents),
+    path('api/consents/<int:consent_id>/', admin_consent_detail),
 ]
 
 

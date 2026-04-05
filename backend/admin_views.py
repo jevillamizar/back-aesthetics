@@ -7,6 +7,7 @@ from django.views.decorators.csrf import csrf_exempt
 
 from appointments.models import Appointment
 from landing.models import ClinicLanding
+from medical_records.models import Consent
 from patients.models import Patient
 from treatments.models import Treatment
 from .auth_views import get_auth_user
@@ -1094,6 +1095,170 @@ def admin_medical_record_detail(request, record_id):
 
     if request.method == 'DELETE':
         rec.delete()
+        return JsonResponse({'detail': 'Deleted'}, status=204)
+
+    return JsonResponse({'detail': 'Method not allowed'}, status=405)
+
+
+# ─── Consents ──────────────────────────────────────────────────
+
+def _consent_to_dict(c):
+    return {
+        'id': c.id,
+        'patient_id': c.patient_id,
+        'patient_name': f"{c.patient.first_name} {c.patient.last_name}".strip() if c.patient else '—',
+        'doctor_id': c.doctor_id,
+        'doctor_name': (
+            f"{c.doctor.first_name} {c.doctor.last_name}".strip() or c.doctor.email
+            if c.doctor else '—'
+        ),
+        'doctor_profession': c.doctor.profession or '' if c.doctor else '',
+        'doctor_specialty': c.doctor.specialty or '' if c.doctor else '',
+        'doctor_rethus_number': c.doctor.rethus_number or '' if c.doctor else '',
+        'doctor_professional_seal': c.doctor.professional_seal or '' if c.doctor else '',
+        'medical_record_id': c.medical_record_id,
+        'procedure_description': c.procedure_description or '',
+        'risks': c.risks or '',
+        'notes': c.notes or '',
+        'signed_by_name': c.signed_by_name or '',
+        'signed_at': c.signed_at.isoformat() if c.signed_at else None,
+        'signature_image': c.signature_image or '',
+        'created_at': c.created_at.isoformat(),
+    }
+
+
+@csrf_exempt
+def admin_consents(request):
+    admin, err = _require_admin(request)
+    if err:
+        return err
+
+    if request.method == 'GET':
+        qs = (
+            Consent.objects
+            .select_related('patient', 'doctor')
+            .order_by('-created_at')
+        )
+        patient_id = request.GET.get('patient_id')
+        if patient_id:
+            qs = qs.filter(patient_id=patient_id)
+        signed = request.GET.get('signed')
+        if signed == '1':
+            qs = qs.filter(signed_at__isnull=False)
+        elif signed == '0':
+            qs = qs.filter(signed_at__isnull=True)
+        return JsonResponse({'consents': [_consent_to_dict(c) for c in qs]})
+
+    if request.method == 'POST':
+        try:
+            payload = json.loads(request.body)
+        except Exception:
+            return JsonResponse({'detail': 'Invalid JSON'}, status=400)
+
+        patient_id = payload.get('patient_id')
+        if not patient_id:
+            return JsonResponse({'detail': 'patient_id required'}, status=400)
+        try:
+            patient = Patient.objects.get(id=patient_id)
+        except Patient.DoesNotExist:
+            return JsonResponse({'detail': 'Patient not found'}, status=404)
+
+        from users.models import User
+        doctor = None
+        if payload.get('doctor_id'):
+            try:
+                doctor = User.objects.get(id=payload['doctor_id'], role='DOCTOR')
+            except User.DoesNotExist:
+                pass
+
+        from medical_records.models import MedicalRecord
+        medical_record = None
+        if payload.get('medical_record_id'):
+            try:
+                medical_record = MedicalRecord.objects.get(id=payload['medical_record_id'])
+            except MedicalRecord.DoesNotExist:
+                pass
+
+        signed_at = None
+        if payload.get('signed_at'):
+            from django.utils.dateparse import parse_datetime
+            signed_at = parse_datetime(payload['signed_at'])
+
+        consent = Consent.objects.create(
+            patient=patient,
+            doctor=doctor,
+            medical_record=medical_record,
+            procedure_description=(payload.get('procedure_description') or '').strip(),
+            risks=(payload.get('risks') or '').strip(),
+            notes=(payload.get('notes') or '').strip(),
+            signed_by_name=(payload.get('signed_by_name') or '').strip(),
+            signed_at=signed_at,
+            signature_image=(payload.get('signature_image') or '').strip(),
+        )
+        consent = Consent.objects.select_related('patient', 'doctor').get(id=consent.id)
+        return JsonResponse({'consent': _consent_to_dict(consent)}, status=201)
+
+    return JsonResponse({'detail': 'Method not allowed'}, status=405)
+
+
+@csrf_exempt
+def admin_consent_detail(request, consent_id):
+    admin, err = _require_admin(request)
+    if err:
+        return err
+
+    try:
+        consent = Consent.objects.select_related('patient', 'doctor').get(id=consent_id)
+    except Consent.DoesNotExist:
+        return JsonResponse({'detail': 'Not found'}, status=404)
+
+    if request.method == 'GET':
+        return JsonResponse({'consent': _consent_to_dict(consent)})
+
+    if request.method == 'PUT':
+        try:
+            payload = json.loads(request.body)
+        except Exception:
+            return JsonResponse({'detail': 'Invalid JSON'}, status=400)
+
+        from users.models import User
+        if 'doctor_id' in payload:
+            if payload['doctor_id']:
+                try:
+                    consent.doctor = User.objects.get(id=payload['doctor_id'], role='DOCTOR')
+                except User.DoesNotExist:
+                    consent.doctor = None
+            else:
+                consent.doctor = None
+
+        from medical_records.models import MedicalRecord
+        if 'medical_record_id' in payload:
+            if payload['medical_record_id']:
+                try:
+                    consent.medical_record = MedicalRecord.objects.get(id=payload['medical_record_id'])
+                except MedicalRecord.DoesNotExist:
+                    consent.medical_record = None
+            else:
+                consent.medical_record = None
+
+        for field in ('procedure_description', 'risks', 'notes', 'signed_by_name', 'signature_image'):
+            if field in payload:
+                setattr(consent, field, (payload[field] or '').strip())
+
+        if 'signed_at' in payload:
+            if payload['signed_at']:
+                from django.utils.dateparse import parse_datetime
+                consent.signed_at = parse_datetime(payload['signed_at'])
+            else:
+                consent.signed_at = None
+
+        consent.save()
+        consent.refresh_from_db()
+        consent = Consent.objects.select_related('patient', 'doctor').get(id=consent_id)
+        return JsonResponse({'consent': _consent_to_dict(consent)})
+
+    if request.method == 'DELETE':
+        consent.delete()
         return JsonResponse({'detail': 'Deleted'}, status=204)
 
     return JsonResponse({'detail': 'Method not allowed'}, status=405)
