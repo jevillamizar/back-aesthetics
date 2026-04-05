@@ -649,7 +649,7 @@ def _doctor_to_dict(u):
         'is_active': u.is_active,
         'document_type': u.document_type or '',
         'document_number': u.document_number or '',
-        'date_of_birth': u.date_of_birth.isoformat() if u.date_of_birth else '',
+        'date_of_birth': u.date_of_birth.isoformat() if u.date_of_birth and not isinstance(u.date_of_birth, str) else (u.date_of_birth or ''),
         'phone': u.phone or '',
         'profession': u.profession or '',
         'specialty': u.specialty or '',
