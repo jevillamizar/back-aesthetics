@@ -19,8 +19,25 @@ class MedicalRecord(models.Model):
         blank=True,
     )
 
-    chief_complaint = models.CharField(max_length=255, blank=True)
-    diagnosis = models.CharField(max_length=255, blank=True)
+    chief_complaint          = models.CharField(max_length=255, blank=True)
+    current_illness          = models.TextField(blank=True)
+
+    # Antecedentes
+    personal_history         = models.TextField(blank=True)
+    surgical_history         = models.TextField(blank=True)
+    allergic_history         = models.TextField(blank=True)
+    pharmacological_history  = models.TextField(blank=True)
+    family_history           = models.TextField(blank=True)
+
+    physical_exam            = models.TextField(blank=True)
+    diagnosis                = models.CharField(max_length=255, blank=True)
+    treatment_plan           = models.TextField(blank=True)
+    evolution                = models.TextField(blank=True)
+
+    # Consentimiento informado
+    informed_consent         = models.TextField(blank=True)
+    consent_signed           = models.BooleanField(default=False)
+
     notes = models.TextField(blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)

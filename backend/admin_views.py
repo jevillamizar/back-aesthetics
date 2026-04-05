@@ -499,7 +499,13 @@ def _patient_to_dict(p, request=None):
         'email': p.email or '',
         'address': p.address or '',
         'photo': photo_url,
+        'eps': p.eps or '',
+        'legal_guardian': p.legal_guardian or '',
+        'emergency_contact_name': p.emergency_contact_name or '',
+        'emergency_contact_phone': p.emergency_contact_phone or '',
+        'emergency_contact_relation': p.emergency_contact_relation or '',
         'notes': p.notes or '',
+        'created_at': p.created_at.isoformat() if p.created_at else None,
     }
 
 
@@ -548,6 +554,11 @@ def admin_patients(request):
             phone=(payload.get('phone') or '').strip(),
             email=(payload.get('email') or '').strip(),
             address=(payload.get('address') or '').strip(),
+            eps=(payload.get('eps') or '').strip(),
+            legal_guardian=(payload.get('legal_guardian') or '').strip(),
+            emergency_contact_name=(payload.get('emergency_contact_name') or '').strip(),
+            emergency_contact_phone=(payload.get('emergency_contact_phone') or '').strip(),
+            emergency_contact_relation=(payload.get('emergency_contact_relation') or '').strip(),
             notes=(payload.get('notes') or '').strip(),
         )
         if 'photo' in files:
@@ -601,6 +612,16 @@ def admin_patient_detail(request, patient_id):
             p.email = (payload['email'] or '').strip()
         if 'address' in payload:
             p.address = (payload['address'] or '').strip()
+        if 'eps' in payload:
+            p.eps = (payload['eps'] or '').strip()
+        if 'legal_guardian' in payload:
+            p.legal_guardian = (payload['legal_guardian'] or '').strip()
+        if 'emergency_contact_name' in payload:
+            p.emergency_contact_name = (payload['emergency_contact_name'] or '').strip()
+        if 'emergency_contact_phone' in payload:
+            p.emergency_contact_phone = (payload['emergency_contact_phone'] or '').strip()
+        if 'emergency_contact_relation' in payload:
+            p.emergency_contact_relation = (payload['emergency_contact_relation'] or '').strip()
         if 'notes' in payload:
             p.notes = (payload['notes'] or '').strip()
         if 'photo' in files:
@@ -819,7 +840,18 @@ def _medical_record_to_dict(rec):
         'doctor_name': f"{rec.doctor.first_name} {rec.doctor.last_name}".strip() or rec.doctor.email if rec.doctor else '—',
         'appointment_id': rec.appointment_id,
         'chief_complaint': rec.chief_complaint or '',
+        'current_illness': rec.current_illness or '',
+        'personal_history': rec.personal_history or '',
+        'surgical_history': rec.surgical_history or '',
+        'allergic_history': rec.allergic_history or '',
+        'pharmacological_history': rec.pharmacological_history or '',
+        'family_history': rec.family_history or '',
+        'physical_exam': rec.physical_exam or '',
         'diagnosis': rec.diagnosis or '',
+        'treatment_plan': rec.treatment_plan or '',
+        'evolution': rec.evolution or '',
+        'informed_consent': rec.informed_consent or '',
+        'consent_signed': rec.consent_signed,
         'notes': rec.notes or '',
         'created_at': rec.created_at.isoformat(),
         'treatment_items': [
@@ -899,7 +931,18 @@ def admin_medical_records(request):
             doctor=doctor,
             appointment=appointment,
             chief_complaint=(payload.get('chief_complaint') or '').strip(),
+            current_illness=(payload.get('current_illness') or '').strip(),
+            personal_history=(payload.get('personal_history') or '').strip(),
+            surgical_history=(payload.get('surgical_history') or '').strip(),
+            allergic_history=(payload.get('allergic_history') or '').strip(),
+            pharmacological_history=(payload.get('pharmacological_history') or '').strip(),
+            family_history=(payload.get('family_history') or '').strip(),
+            physical_exam=(payload.get('physical_exam') or '').strip(),
             diagnosis=(payload.get('diagnosis') or '').strip(),
+            treatment_plan=(payload.get('treatment_plan') or '').strip(),
+            evolution=(payload.get('evolution') or '').strip(),
+            informed_consent=(payload.get('informed_consent') or '').strip(),
+            consent_signed=bool(payload.get('consent_signed', False)),
             notes=(payload.get('notes') or '').strip(),
         )
 
@@ -950,8 +993,30 @@ def admin_medical_record_detail(request, record_id):
 
         if 'chief_complaint' in payload:
             rec.chief_complaint = (payload['chief_complaint'] or '').strip()
+        if 'current_illness' in payload:
+            rec.current_illness = (payload['current_illness'] or '').strip()
+        if 'personal_history' in payload:
+            rec.personal_history = (payload['personal_history'] or '').strip()
+        if 'surgical_history' in payload:
+            rec.surgical_history = (payload['surgical_history'] or '').strip()
+        if 'allergic_history' in payload:
+            rec.allergic_history = (payload['allergic_history'] or '').strip()
+        if 'pharmacological_history' in payload:
+            rec.pharmacological_history = (payload['pharmacological_history'] or '').strip()
+        if 'family_history' in payload:
+            rec.family_history = (payload['family_history'] or '').strip()
+        if 'physical_exam' in payload:
+            rec.physical_exam = (payload['physical_exam'] or '').strip()
         if 'diagnosis' in payload:
             rec.diagnosis = (payload['diagnosis'] or '').strip()
+        if 'treatment_plan' in payload:
+            rec.treatment_plan = (payload['treatment_plan'] or '').strip()
+        if 'evolution' in payload:
+            rec.evolution = (payload['evolution'] or '').strip()
+        if 'informed_consent' in payload:
+            rec.informed_consent = (payload['informed_consent'] or '').strip()
+        if 'consent_signed' in payload:
+            rec.consent_signed = bool(payload['consent_signed'])
         if 'notes' in payload:
             rec.notes = (payload['notes'] or '').strip()
         rec.save()
