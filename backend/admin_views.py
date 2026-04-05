@@ -647,6 +647,19 @@ def _doctor_to_dict(u):
         'last_name': u.last_name or '',
         'email': u.email,
         'is_active': u.is_active,
+        'document_type': u.document_type or '',
+        'document_number': u.document_number or '',
+        'date_of_birth': u.date_of_birth.isoformat() if u.date_of_birth else '',
+        'phone': u.phone or '',
+        'profession': u.profession or '',
+        'specialty': u.specialty or '',
+        'university': u.university or '',
+        'graduation_year': u.graduation_year,
+        'rethus_number': u.rethus_number or '',
+        'rethus_status': u.rethus_status or 'ACTIVE',
+        'certifying_entity': u.certifying_entity or '',
+        'professional_seal': u.professional_seal or '',
+        'notes': u.notes or '',
     }
 
 
@@ -670,24 +683,46 @@ def admin_doctors(request):
         return JsonResponse({'doctors': [_doctor_to_dict(u) for u in qs]})
 
     if request.method == 'POST':
+        import secrets, string as _string
         try:
             payload = json.loads(request.body.decode('utf-8') or '{}')
         except json.JSONDecodeError:
             return JsonResponse({'detail': 'Invalid JSON'}, status=400)
         email = (payload.get('email') or '').strip()
-        password = (payload.get('password') or '').strip()
-        if not email or not password:
-            return JsonResponse({'detail': 'email and password required'}, status=400)
+        if not email:
+            return JsonResponse({'detail': 'email required'}, status=400)
         if _User.objects.filter(email=email).exists():
             return JsonResponse({'detail': 'Email already in use'}, status=400)
+        password = (payload.get('password') or '').strip()
+        generated = False
+        if not password:
+            alphabet = _string.ascii_letters + _string.digits + '!@#$'
+            password = ''.join(secrets.choice(alphabet) for _ in range(12))
+            generated = True
         doc = _User.objects.create_user(
             email=email,
             password=password,
             first_name=(payload.get('first_name') or '').strip(),
             last_name=(payload.get('last_name') or '').strip(),
             role=_User.Role.DOCTOR,
+            document_type=(payload.get('document_type') or 'CC').strip(),
+            document_number=(payload.get('document_number') or '').strip(),
+            date_of_birth=payload.get('date_of_birth') or None,
+            phone=(payload.get('phone') or '').strip(),
+            profession=(payload.get('profession') or '').strip(),
+            specialty=(payload.get('specialty') or '').strip(),
+            university=(payload.get('university') or '').strip(),
+            graduation_year=payload.get('graduation_year') or None,
+            rethus_number=(payload.get('rethus_number') or '').strip(),
+            rethus_status=(payload.get('rethus_status') or 'ACTIVE').strip(),
+            certifying_entity=(payload.get('certifying_entity') or '').strip(),
+            professional_seal=(payload.get('professional_seal') or '').strip(),
+            notes=(payload.get('notes') or '').strip(),
         )
-        return JsonResponse({'doctor': _doctor_to_dict(doc)}, status=201)
+        resp = {'doctor': _doctor_to_dict(doc)}
+        if generated:
+            resp['generated_password'] = password
+        return JsonResponse(resp, status=201)
 
     return JsonResponse({'detail': 'Method not allowed'}, status=405)
 
@@ -712,10 +747,20 @@ def admin_doctor_detail(request, doctor_id):
             payload = json.loads(request.body.decode('utf-8') or '{}')
         except json.JSONDecodeError:
             return JsonResponse({'detail': 'Invalid JSON'}, status=400)
-        if 'first_name' in payload:
-            doc.first_name = (payload['first_name'] or '').strip()
-        if 'last_name' in payload:
-            doc.last_name = (payload['last_name'] or '').strip()
+        simple_fields = [
+            'first_name', 'last_name', 'document_number', 'phone',
+            'profession', 'specialty', 'university', 'rethus_number',
+            'rethus_status', 'certifying_entity', 'professional_seal', 'notes',
+        ]
+        for f in simple_fields:
+            if f in payload:
+                setattr(doc, f, (payload[f] or '').strip())
+        if 'document_type' in payload:
+            doc.document_type = (payload['document_type'] or 'CC').strip()
+        if 'date_of_birth' in payload:
+            doc.date_of_birth = payload['date_of_birth'] or None
+        if 'graduation_year' in payload:
+            doc.graduation_year = payload['graduation_year'] or None
         if 'email' in payload:
             new_email = (payload['email'] or '').strip()
             if new_email and new_email != doc.email:
@@ -838,6 +883,11 @@ def _medical_record_to_dict(rec):
         'patient_name': f"{rec.patient.first_name} {rec.patient.last_name}".strip() if rec.patient else '—',
         'doctor_id': rec.doctor_id,
         'doctor_name': f"{rec.doctor.first_name} {rec.doctor.last_name}".strip() or rec.doctor.email if rec.doctor else '—',
+        'doctor_profession': rec.doctor.profession or '' if rec.doctor else '',
+        'doctor_specialty': rec.doctor.specialty or '' if rec.doctor else '',
+        'doctor_rethus_number': rec.doctor.rethus_number or '' if rec.doctor else '',
+        'doctor_rethus_status': rec.doctor.rethus_status or '' if rec.doctor else '',
+        'doctor_professional_seal': rec.doctor.professional_seal or '' if rec.doctor else '',
         'appointment_id': rec.appointment_id,
         'chief_complaint': rec.chief_complaint or '',
         'current_illness': rec.current_illness or '',
