@@ -327,6 +327,21 @@ def admin_appointments(request):
         patient_filter = request.GET.get('patient_id')
         if patient_filter:
             qs = qs.filter(patient_id=patient_filter)
+        doctor_filter = request.GET.get('doctor_id')
+        if doctor_filter:
+            qs = qs.filter(doctor_id=doctor_filter)
+        from_date = request.GET.get('from')
+        to_date = request.GET.get('to')
+        if from_date:
+            from django.utils.dateparse import parse_date as _pd2
+            fd = _pd2(from_date)
+            if fd:
+                qs = qs.filter(starts_at__date__gte=fd)
+        if to_date:
+            from django.utils.dateparse import parse_date as _pd3
+            td = _pd3(to_date)
+            if td:
+                qs = qs.filter(starts_at__date__lte=td)
         if request.GET.get('past') == '1':
             qs = (
                 Appointment.objects
@@ -649,6 +664,275 @@ def admin_doctor_detail(request, doctor_id):
 
     if request.method == 'DELETE':
         doc.delete()
+        return JsonResponse({'detail': 'Deleted'}, status=204)
+
+    return JsonResponse({'detail': 'Method not allowed'}, status=405)
+
+
+# ─── Revenue ──────────────────────────────────────────────────────────
+
+@csrf_exempt
+def admin_revenue(request):
+    user, err = _require_admin(request)
+    if err:
+        return err
+    if request.method != 'GET':
+        return JsonResponse({'detail': 'Method not allowed'}, status=405)
+
+    from medical_records.models import MedicalRecord, MedicalRecordTreatment
+    from django.db.models import Sum, F, ExpressionWrapper, DecimalField as _Dec
+    from django.db.models.functions import TruncMonth
+
+    year = request.GET.get('year')
+    try:
+        year = int(year) if year else timezone.now().year
+    except ValueError:
+        year = timezone.now().year
+
+    # Revenue from medical record treatment items
+    items_qs = MedicalRecordTreatment.objects.filter(
+        medical_record__appointment__starts_at__year=year,
+        medical_record__appointment__status=Appointment.Status.COMPLETED,
+    ).select_related('medical_record__appointment', 'treatment')
+
+    revenue_expr = ExpressionWrapper(
+        F('price') * F('quantity'), output_field=_Dec(max_digits=14, decimal_places=2)
+    )
+
+    # Monthly breakdown
+    monthly_raw = (
+        items_qs
+        .annotate(month=TruncMonth('medical_record__appointment__starts_at'))
+        .values('month')
+        .annotate(total=Sum(revenue_expr))
+        .order_by('month')
+    )
+    monthly = [
+        {'month': row['month'].strftime('%Y-%m'), 'total': float(row['total'] or 0)}
+        for row in monthly_raw
+    ]
+
+    # Fill missing months with 0
+    monthly_map = {r['month']: r['total'] for r in monthly}
+    monthly_full = []
+    for m in range(1, 13):
+        key = f'{year}-{m:02d}'
+        monthly_full.append({'month': key, 'total': monthly_map.get(key, 0)})
+
+    # Top treatments
+    top_treatments = (
+        items_qs
+        .values(name=F('treatment__name'))
+        .annotate(total=Sum(revenue_expr))
+        .order_by('-total')[:8]
+    )
+    top_treatments_list = [{'name': r['name'], 'total': float(r['total'] or 0)} for r in top_treatments]
+
+    # Top doctors
+    top_doctors = (
+        items_qs
+        .values(email=F('medical_record__doctor__email'),
+                first=F('medical_record__doctor__first_name'),
+                last=F('medical_record__doctor__last_name'))
+        .annotate(total=Sum(revenue_expr))
+        .order_by('-total')[:6]
+    )
+    top_doctors_list = [
+        {'name': f"{r['first']} {r['last']}".strip() or r['email'], 'total': float(r['total'] or 0)}
+        for r in top_doctors
+    ]
+
+    total_year = sum(r['total'] for r in monthly_full)
+
+    # Count of completed appointments for the year
+    completed_count = Appointment.objects.filter(
+        starts_at__year=year,
+        status=Appointment.Status.COMPLETED,
+    ).count()
+
+    return JsonResponse({
+        'year': year,
+        'total': total_year,
+        'completed_appointments': completed_count,
+        'avg_per_appointment': round(total_year / completed_count, 2) if completed_count else 0,
+        'monthly': monthly_full,
+        'top_treatments': top_treatments_list,
+        'top_doctors': top_doctors_list,
+    })
+
+
+# ─── Medical Records ──────────────────────────────────────────────────
+
+def _medical_record_to_dict(rec):
+    items = rec.treatment_items.select_related('treatment').all()
+    return {
+        'id': rec.id,
+        'patient_id': rec.patient_id,
+        'patient_name': f"{rec.patient.first_name} {rec.patient.last_name}".strip() if rec.patient else '—',
+        'doctor_id': rec.doctor_id,
+        'doctor_name': f"{rec.doctor.first_name} {rec.doctor.last_name}".strip() or rec.doctor.email if rec.doctor else '—',
+        'appointment_id': rec.appointment_id,
+        'chief_complaint': rec.chief_complaint or '',
+        'diagnosis': rec.diagnosis or '',
+        'notes': rec.notes or '',
+        'created_at': rec.created_at.isoformat(),
+        'treatment_items': [
+            {
+                'id': it.id,
+                'treatment_id': it.treatment_id,
+                'treatment_name': it.treatment.name if it.treatment else '—',
+                'quantity': it.quantity,
+                'price': float(it.price),
+                'notes': it.notes or '',
+            }
+            for it in items
+        ],
+    }
+
+
+@csrf_exempt
+def admin_medical_records(request):
+    user, err = _require_admin(request)
+    if err:
+        return err
+
+    from medical_records.models import MedicalRecord, MedicalRecordTreatment
+
+    if request.method == 'GET':
+        patient_id = request.GET.get('patient_id')
+        search = request.GET.get('search', '').strip()
+        qs = (
+            MedicalRecord.objects
+            .select_related('patient', 'doctor', 'appointment')
+            .prefetch_related('treatment_items__treatment')
+            .order_by('-created_at')
+        )
+        if patient_id:
+            qs = qs.filter(patient_id=patient_id)
+        if search:
+            from django.db.models import Q
+            qs = qs.filter(
+                Q(patient__first_name__icontains=search) |
+                Q(patient__last_name__icontains=search) |
+                Q(chief_complaint__icontains=search) |
+                Q(diagnosis__icontains=search)
+            )
+        return JsonResponse({'records': [_medical_record_to_dict(r) for r in qs]})
+
+    if request.method == 'POST':
+        try:
+            payload = json.loads(request.body.decode('utf-8') or '{}')
+        except json.JSONDecodeError:
+            return JsonResponse({'detail': 'Invalid JSON'}, status=400)
+
+        patient_id = payload.get('patient_id')
+        doctor_id = payload.get('doctor_id')
+        if not patient_id or not doctor_id:
+            return JsonResponse({'detail': 'patient_id and doctor_id required'}, status=400)
+
+        try:
+            patient = Patient.objects.get(id=patient_id)
+        except Patient.DoesNotExist:
+            return JsonResponse({'detail': 'Patient not found'}, status=400)
+
+        from users.models import User as _User
+        try:
+            doctor = _User.objects.get(id=doctor_id)
+        except _User.DoesNotExist:
+            return JsonResponse({'detail': 'Doctor not found'}, status=400)
+
+        appointment = None
+        if payload.get('appointment_id'):
+            try:
+                appointment = Appointment.objects.get(id=payload['appointment_id'])
+            except Appointment.DoesNotExist:
+                pass
+
+        rec = MedicalRecord.objects.create(
+            patient=patient,
+            doctor=doctor,
+            appointment=appointment,
+            chief_complaint=(payload.get('chief_complaint') or '').strip(),
+            diagnosis=(payload.get('diagnosis') or '').strip(),
+            notes=(payload.get('notes') or '').strip(),
+        )
+
+        for item in payload.get('treatment_items', []):
+            tid = item.get('treatment_id')
+            if not tid:
+                continue
+            try:
+                t = Treatment.objects.get(id=tid)
+            except Treatment.DoesNotExist:
+                continue
+            MedicalRecordTreatment.objects.create(
+                medical_record=rec,
+                treatment=t,
+                quantity=max(1, int(item.get('quantity', 1))),
+                price=item.get('price', float(t.price)),
+                notes=(item.get('notes') or '').strip(),
+            )
+
+        rec.refresh_from_db()
+        rec = MedicalRecord.objects.select_related('patient', 'doctor', 'appointment').prefetch_related('treatment_items__treatment').get(id=rec.id)
+        return JsonResponse({'record': _medical_record_to_dict(rec)}, status=201)
+
+    return JsonResponse({'detail': 'Method not allowed'}, status=405)
+
+
+@csrf_exempt
+def admin_medical_record_detail(request, record_id):
+    user, err = _require_admin(request)
+    if err:
+        return err
+
+    from medical_records.models import MedicalRecord, MedicalRecordTreatment
+
+    try:
+        rec = MedicalRecord.objects.select_related('patient', 'doctor', 'appointment').prefetch_related('treatment_items__treatment').get(id=record_id)
+    except MedicalRecord.DoesNotExist:
+        return JsonResponse({'detail': 'Not found'}, status=404)
+
+    if request.method == 'GET':
+        return JsonResponse({'record': _medical_record_to_dict(rec)})
+
+    if request.method == 'PUT':
+        try:
+            payload = json.loads(request.body.decode('utf-8') or '{}')
+        except json.JSONDecodeError:
+            return JsonResponse({'detail': 'Invalid JSON'}, status=400)
+
+        if 'chief_complaint' in payload:
+            rec.chief_complaint = (payload['chief_complaint'] or '').strip()
+        if 'diagnosis' in payload:
+            rec.diagnosis = (payload['diagnosis'] or '').strip()
+        if 'notes' in payload:
+            rec.notes = (payload['notes'] or '').strip()
+        rec.save()
+
+        if 'treatment_items' in payload:
+            rec.treatment_items.all().delete()
+            for item in payload['treatment_items']:
+                tid = item.get('treatment_id')
+                if not tid:
+                    continue
+                try:
+                    t = Treatment.objects.get(id=tid)
+                except Treatment.DoesNotExist:
+                    continue
+                MedicalRecordTreatment.objects.create(
+                    medical_record=rec,
+                    treatment=t,
+                    quantity=max(1, int(item.get('quantity', 1))),
+                    price=item.get('price', float(t.price)),
+                    notes=(item.get('notes') or '').strip(),
+                )
+
+        rec = MedicalRecord.objects.select_related('patient', 'doctor', 'appointment').prefetch_related('treatment_items__treatment').get(id=record_id)
+        return JsonResponse({'record': _medical_record_to_dict(rec)})
+
+    if request.method == 'DELETE':
+        rec.delete()
         return JsonResponse({'detail': 'Deleted'}, status=204)
 
     return JsonResponse({'detail': 'Method not allowed'}, status=405)

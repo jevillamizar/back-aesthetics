@@ -23,7 +23,9 @@ from .admin_views import (
     admin_appointment_detail, admin_appointments,
     admin_dashboard, admin_landing,
     admin_doctor_detail, admin_doctors,
+    admin_medical_record_detail, admin_medical_records,
     admin_patient_detail, admin_patients,
+    admin_revenue,
     admin_treatment_detail, admin_treatments,
 )
 from .auth_views import auth_login, auth_me
@@ -47,6 +49,9 @@ urlpatterns = [
     path('api/patients/<int:patient_id>/', admin_patient_detail),
     path('api/doctors/', admin_doctors),
     path('api/doctors/<int:doctor_id>/', admin_doctor_detail),
+    path('api/revenue/', admin_revenue),
+    path('api/medical-records/', admin_medical_records),
+    path('api/medical-records/<int:record_id>/', admin_medical_record_detail),
 ]
 
 
