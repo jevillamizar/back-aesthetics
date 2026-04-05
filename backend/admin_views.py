@@ -477,7 +477,16 @@ def admin_appointment_detail(request, appointment_id):
 
 # ─── Patients ────────────────────────────────────────────────────────
 
-def _patient_to_dict(p):
+def _patient_to_dict(p, request=None):
+    if p.photo:
+        try:
+            photo_url = p.photo.url
+            if request:
+                photo_url = request.build_absolute_uri(photo_url)
+        except Exception:
+            photo_url = None
+    else:
+        photo_url = None
     return {
         'id': p.id,
         'document_type': p.document_type or '',
@@ -489,6 +498,7 @@ def _patient_to_dict(p):
         'phone': p.phone or '',
         'email': p.email or '',
         'address': p.address or '',
+        'photo': photo_url,
         'notes': p.notes or '',
     }
 
@@ -506,15 +516,22 @@ def admin_patients(request):
             from django.db.models import Q
             qs = qs.filter(
                 Q(first_name__icontains=search) | Q(last_name__icontains=search) |
-                Q(email__icontains=search) | Q(phone__icontains=search)
+                Q(email__icontains=search) | Q(phone__icontains=search) |
+                Q(document_number__icontains=search)
             )
-        return JsonResponse({'patients': [_patient_to_dict(p) for p in qs]})
+        return JsonResponse({'patients': [_patient_to_dict(p, request) for p in qs]})
 
     if request.method == 'POST':
-        try:
-            payload = json.loads(request.body.decode('utf-8') or '{}')
-        except json.JSONDecodeError:
-            return JsonResponse({'detail': 'Invalid JSON'}, status=400)
+        content_type = (request.content_type or '').lower()
+        if 'multipart' in content_type:
+            payload = request.POST.dict()
+            files = request.FILES
+        else:
+            try:
+                payload = json.loads(request.body.decode('utf-8') or '{}')
+            except json.JSONDecodeError:
+                return JsonResponse({'detail': 'Invalid JSON'}, status=400)
+            files = {}
         first = (payload.get('first_name') or '').strip()
         last = (payload.get('last_name') or '').strip()
         if not first or not last:
@@ -533,7 +550,10 @@ def admin_patients(request):
             address=(payload.get('address') or '').strip(),
             notes=(payload.get('notes') or '').strip(),
         )
-        return JsonResponse({'patient': _patient_to_dict(p)}, status=201)
+        if 'photo' in files:
+            p.photo = files['photo']
+            p.save()
+        return JsonResponse({'patient': _patient_to_dict(p, request)}, status=201)
 
     return JsonResponse({'detail': 'Method not allowed'}, status=405)
 
@@ -549,13 +569,19 @@ def admin_patient_detail(request, patient_id):
         return JsonResponse({'detail': 'Not found'}, status=404)
 
     if request.method == 'GET':
-        return JsonResponse({'patient': _patient_to_dict(p)})
+        return JsonResponse({'patient': _patient_to_dict(p, request)})
 
     if request.method == 'PUT':
-        try:
-            payload = json.loads(request.body.decode('utf-8') or '{}')
-        except json.JSONDecodeError:
-            return JsonResponse({'detail': 'Invalid JSON'}, status=400)
+        content_type = (request.content_type or '').lower()
+        if 'multipart' in content_type:
+            payload = request.POST.dict()
+            files = request.FILES
+        else:
+            try:
+                payload = json.loads(request.body.decode('utf-8') or '{}')
+            except json.JSONDecodeError:
+                return JsonResponse({'detail': 'Invalid JSON'}, status=400)
+            files = {}
         if 'document_type' in payload:
             p.document_type = (payload['document_type'] or '').strip()
         if 'document_number' in payload:
@@ -577,8 +603,12 @@ def admin_patient_detail(request, patient_id):
             p.address = (payload['address'] or '').strip()
         if 'notes' in payload:
             p.notes = (payload['notes'] or '').strip()
+        if 'photo' in files:
+            p.photo = files['photo']
+        elif payload.get('photo') == '':
+            p.photo = None
         p.save()
-        return JsonResponse({'patient': _patient_to_dict(p)})
+        return JsonResponse({'patient': _patient_to_dict(p, request)})
 
     if request.method == 'DELETE':
         p.delete()
