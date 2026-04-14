@@ -7,10 +7,23 @@ from django.views.decorators.csrf import csrf_exempt
 
 from appointments.models import Appointment, Payment
 from landing.models import ClinicLanding
-from medical_records.models import Consent
+from medical_records.models import Consent, MedicalRecord
 from patients.models import Patient
 from treatments.models import Treatment
 from .auth_views import get_auth_user
+
+
+# ─── Status transition rules ────────────────────────────────────────
+
+ALLOWED_TRANSITIONS = {
+    Appointment.Status.SCHEDULED:   {Appointment.Status.CONFIRMED, Appointment.Status.CANCELED, Appointment.Status.NO_SHOW},
+    Appointment.Status.CONFIRMED:   {Appointment.Status.IN_PROGRESS, Appointment.Status.CANCELED},
+    Appointment.Status.IN_PROGRESS: {Appointment.Status.COMPLETED, Appointment.Status.CANCELED},
+    Appointment.Status.COMPLETED:   set(),
+    Appointment.Status.CANCELED:    set(),
+    Appointment.Status.NO_SHOW:     set(),
+    Appointment.Status.PENDING:     {Appointment.Status.SCHEDULED, Appointment.Status.CANCELED},
+}
 
 
 def _require_admin(request):
@@ -476,6 +489,64 @@ def admin_appointment_detail(request, appointment_id):
         new_status = payload.get('status')
         if not new_status:
             return JsonResponse({'detail': 'status required'}, status=400)
+
+        # Validate transition
+        allowed = ALLOWED_TRANSITIONS.get(a.status, set())
+        if new_status not in allowed:
+            return JsonResponse(
+                {'detail': f'Transición no permitida: {a.status} → {new_status}. Permitidas: {", ".join(allowed) or "ninguna"}'},
+                status=400,
+            )
+
+        # SCHEDULED → CONFIRMED: require payment (PAID or PARTIAL) + signed consent
+        if new_status == Appointment.Status.CONFIRMED:
+            try:
+                pay = a.payment
+                if pay.status not in (Payment.Status.PAID, Payment.Status.PARTIAL):
+                    return JsonResponse({'detail': 'Se requiere pago registrado (pagado o parcial) para confirmar.'}, status=400)
+            except Payment.DoesNotExist:
+                return JsonResponse({'detail': 'Se requiere registrar el pago antes de confirmar.'}, status=400)
+            # Check consent
+            has_consent = False
+            try:
+                if a.medical_record and a.medical_record.consents.filter(signed_at__isnull=False).exists():
+                    has_consent = True
+            except Exception:
+                pass
+            if not has_consent:
+                # Also check standalone consents linked to this patient for today
+                from django.utils import timezone as _tz
+                today = _tz.now().date()
+                has_consent = Consent.objects.filter(
+                    patient=a.patient,
+                    signed_at__isnull=False,
+                    created_at__date=today,
+                ).exists()
+            if not has_consent:
+                return JsonResponse({'detail': 'Se requiere consentimiento firmado para confirmar.'}, status=400)
+
+        # CONFIRMED → IN_PROGRESS: require doctor, auto-create MedicalRecord
+        if new_status == Appointment.Status.IN_PROGRESS:
+            if not a.doctor_id:
+                return JsonResponse({'detail': 'Se requiere un médico asignado para iniciar consulta.'}, status=400)
+            try:
+                a.medical_record
+            except Exception:
+                MedicalRecord.objects.create(
+                    patient=a.patient,
+                    doctor=a.doctor,
+                    appointment=a,
+                )
+
+        # IN_PROGRESS → COMPLETED: require MedicalRecord with diagnosis
+        if new_status == Appointment.Status.COMPLETED:
+            try:
+                mr = a.medical_record
+                if not mr.diagnosis.strip():
+                    return JsonResponse({'detail': 'Se requiere diagnóstico en la historia clínica para completar.'}, status=400)
+            except Exception:
+                return JsonResponse({'detail': 'Se requiere historia clínica para completar la cita.'}, status=400)
+
         a.status = new_status
         a.save(update_fields=['status', 'updated_at'])
         a = Appointment.objects.select_related('patient', 'treatment', 'doctor').prefetch_related('payment', 'medical_record__consents').get(id=appointment_id)
@@ -528,6 +599,140 @@ def admin_appointment_detail(request, appointment_id):
     if request.method == 'DELETE':
         a.delete()
         return JsonResponse({'detail': 'Deleted'}, status=204)
+
+    return JsonResponse({'detail': 'Method not allowed'}, status=405)
+
+
+# ─── Appointment Payment ─────────────────────────────────────────────
+
+@csrf_exempt
+def admin_appointment_payment(request, appointment_id):
+    user, err = _require_admin(request)
+    if err:
+        return err
+
+    try:
+        a = Appointment.objects.get(id=appointment_id)
+    except Appointment.DoesNotExist:
+        return JsonResponse({'detail': 'Appointment not found'}, status=404)
+
+    if request.method == 'GET':
+        try:
+            p = a.payment
+            return JsonResponse({'payment': {
+                'id': p.id,
+                'amount': float(p.amount),
+                'method': p.method,
+                'status': p.status,
+                'notes': p.notes or '',
+                'paid_at': p.paid_at.isoformat() if p.paid_at else None,
+            }})
+        except Payment.DoesNotExist:
+            return JsonResponse({'payment': None})
+
+    if request.method in ('POST', 'PUT'):
+        try:
+            payload = json.loads(request.body.decode('utf-8') or '{}')
+        except json.JSONDecodeError:
+            return JsonResponse({'detail': 'Invalid JSON'}, status=400)
+
+        amount = payload.get('amount')
+        if amount is None:
+            return JsonResponse({'detail': 'amount required'}, status=400)
+
+        method = payload.get('method', Payment.Method.CASH)
+        status = payload.get('status', Payment.Status.PAID)
+        notes = (payload.get('notes') or '').strip()
+
+        paid_at = None
+        if status in (Payment.Status.PAID, Payment.Status.PARTIAL):
+            if payload.get('paid_at'):
+                from django.utils.dateparse import parse_datetime as _pdt
+                paid_at = _pdt(payload['paid_at'])
+            else:
+                paid_at = timezone.now()
+
+        payment, created = Payment.objects.update_or_create(
+            appointment=a,
+            defaults={
+                'amount': amount,
+                'method': method,
+                'status': status,
+                'notes': notes,
+                'paid_at': paid_at,
+            },
+        )
+        return JsonResponse({
+            'payment': {
+                'id': payment.id,
+                'amount': float(payment.amount),
+                'method': payment.method,
+                'status': payment.status,
+                'notes': payment.notes or '',
+                'paid_at': payment.paid_at.isoformat() if payment.paid_at else None,
+            }
+        }, status=201 if created else 200)
+
+    return JsonResponse({'detail': 'Method not allowed'}, status=405)
+
+
+# ─── Appointment Consent ─────────────────────────────────────────────
+
+@csrf_exempt
+def admin_appointment_consent(request, appointment_id):
+    """Create/retrieve a consent tied to a specific appointment's patient."""
+    user, err = _require_admin(request)
+    if err:
+        return err
+
+    try:
+        a = Appointment.objects.select_related('patient', 'doctor').get(id=appointment_id)
+    except Appointment.DoesNotExist:
+        return JsonResponse({'detail': 'Appointment not found'}, status=404)
+
+    if request.method == 'GET':
+        consents = Consent.objects.filter(
+            patient=a.patient,
+        ).select_related('patient', 'doctor').order_by('-created_at')
+        return JsonResponse({'consents': [_consent_to_dict(c) for c in consents]})
+
+    if request.method == 'POST':
+        try:
+            payload = json.loads(request.body.decode('utf-8') or '{}')
+        except json.JSONDecodeError:
+            return JsonResponse({'detail': 'Invalid JSON'}, status=400)
+
+        signed_at = None
+        if payload.get('signed_by_name'):
+            signed_at = timezone.now()
+
+        from users.models import User
+        doctor = a.doctor
+        if payload.get('doctor_id'):
+            try:
+                doctor = User.objects.get(id=payload['doctor_id'], role='DOCTOR')
+            except User.DoesNotExist:
+                pass
+
+        medical_record = None
+        try:
+            medical_record = a.medical_record
+        except Exception:
+            pass
+
+        consent = Consent.objects.create(
+            patient=a.patient,
+            doctor=doctor,
+            medical_record=medical_record,
+            procedure_description=(payload.get('procedure_description') or '').strip(),
+            risks=(payload.get('risks') or '').strip(),
+            notes=(payload.get('notes') or '').strip(),
+            signed_by_name=(payload.get('signed_by_name') or '').strip(),
+            signed_at=signed_at,
+            signature_image=(payload.get('signature_image') or '').strip(),
+        )
+        consent = Consent.objects.select_related('patient', 'doctor').get(id=consent.id)
+        return JsonResponse({'consent': _consent_to_dict(consent)}, status=201)
 
     return JsonResponse({'detail': 'Method not allowed'}, status=405)
 
