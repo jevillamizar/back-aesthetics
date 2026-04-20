@@ -5,7 +5,7 @@ from django.http import JsonResponse
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 
-from appointments.models import Appointment
+from appointments.models import Appointment, Payment
 from landing.models import ClinicLanding
 from medical_records.models import Consent
 from patients.models import Patient
@@ -286,6 +286,39 @@ def _auto_no_show():
 
 
 def _appointment_to_dict(a):
+    try:
+        p = a.payment
+        payment = {
+            'id': p.id,
+            'amount': float(p.amount),
+            'method': p.method,
+            'status': p.status,
+            'notes': p.notes or '',
+            'paid_at': p.paid_at.isoformat() if p.paid_at else None,
+        }
+    except Exception:
+        payment = None
+
+    try:
+        mr = a.medical_record
+        medical_record_id = mr.id if mr else None
+    except Exception:
+        medical_record_id = None
+
+    consent_info = None
+    if medical_record_id:
+        try:
+            c = a.medical_record.consents.order_by('-created_at').first()
+            if c:
+                consent_info = {
+                    'id': c.id,
+                    'signed': bool(c.signed_at),
+                    'signed_at': c.signed_at.isoformat() if c.signed_at else None,
+                    'signed_by_name': c.signed_by_name or '',
+                }
+        except Exception:
+            pass
+
     return {
         'id': a.id,
         'starts_at': a.starts_at.isoformat(),
@@ -298,8 +331,16 @@ def _appointment_to_dict(a):
         'patient_phone': a.patient.phone if a.patient else '',
         'treatment_id': a.treatment_id,
         'treatment_name': a.treatment.name if a.treatment else None,
+        'treatment_price': float(a.treatment.price) if a.treatment else None,
         'doctor_id': a.doctor_id,
+        'doctor_name': (
+            f"{a.doctor.first_name} {a.doctor.last_name}".strip() or a.doctor.email
+            if a.doctor else None
+        ),
         'doctor_email': a.doctor.email if a.doctor else None,
+        'payment': payment,
+        'medical_record_id': medical_record_id,
+        'consent': consent_info,
     }
 
 
@@ -314,6 +355,7 @@ def admin_appointments(request):
         qs = (
             Appointment.objects
             .select_related('patient', 'treatment', 'doctor')
+            .prefetch_related('payment', 'medical_record__consents')
             .order_by('starts_at')
         )
         status_filter = request.GET.get('status')
@@ -347,6 +389,7 @@ def admin_appointments(request):
             qs = (
                 Appointment.objects
                 .select_related('patient', 'treatment', 'doctor')
+                .prefetch_related('payment', 'medical_record__consents')
                 .filter(status__in=['COMPLETED', 'CANCELED', 'NO_SHOW'])
                 .order_by('-starts_at')
             )
@@ -418,11 +461,24 @@ def admin_appointment_detail(request, appointment_id):
         return err
 
     try:
-        a = Appointment.objects.select_related('patient', 'treatment', 'doctor').get(id=appointment_id)
+        a = Appointment.objects.select_related('patient', 'treatment', 'doctor').prefetch_related('payment', 'medical_record__consents').get(id=appointment_id)
     except Appointment.DoesNotExist:
         return JsonResponse({'detail': 'Not found'}, status=404)
 
     if request.method == 'GET':
+        return JsonResponse({'appointment': _appointment_to_dict(a)})
+
+    if request.method == 'PATCH':
+        try:
+            payload = json.loads(request.body.decode('utf-8') or '{}')
+        except json.JSONDecodeError:
+            return JsonResponse({'detail': 'Invalid JSON'}, status=400)
+        new_status = payload.get('status')
+        if not new_status:
+            return JsonResponse({'detail': 'status required'}, status=400)
+        a.status = new_status
+        a.save(update_fields=['status', 'updated_at'])
+        a = Appointment.objects.select_related('patient', 'treatment', 'doctor').prefetch_related('payment', 'medical_record__consents').get(id=appointment_id)
         return JsonResponse({'appointment': _appointment_to_dict(a)})
 
     if request.method == 'PUT':
@@ -466,7 +522,7 @@ def admin_appointment_detail(request, appointment_id):
                 return JsonResponse({'detail': 'patient not found'}, status=400)
         a.save()
         a.refresh_from_db()
-        a = Appointment.objects.select_related('patient', 'treatment', 'doctor').get(id=appointment_id)
+        a = Appointment.objects.select_related('patient', 'treatment', 'doctor').prefetch_related('payment', 'medical_record__consents').get(id=appointment_id)
         return JsonResponse({'appointment': _appointment_to_dict(a)})
 
     if request.method == 'DELETE':
@@ -1259,6 +1315,83 @@ def admin_consent_detail(request, consent_id):
 
     if request.method == 'DELETE':
         consent.delete()
+        return JsonResponse({'detail': 'Deleted'}, status=204)
+
+    return JsonResponse({'detail': 'Method not allowed'}, status=405)
+
+
+# ─── Payments ────────────────────────────────────────────────────────
+
+def _payment_to_dict(p):
+    return {
+        'id': p.id,
+        'appointment_id': p.appointment_id,
+        'amount': float(p.amount),
+        'method': p.method,
+        'status': p.status,
+        'notes': p.notes or '',
+        'paid_at': p.paid_at.isoformat() if p.paid_at else None,
+        'created_at': p.created_at.isoformat(),
+    }
+
+
+@csrf_exempt
+def admin_appointment_payment(request, appointment_id):
+    """GET/POST/PUT the payment for a specific appointment."""
+    admin, err = _require_admin(request)
+    if err:
+        return err
+
+    try:
+        appointment = Appointment.objects.get(id=appointment_id)
+    except Appointment.DoesNotExist:
+        return JsonResponse({'detail': 'Appointment not found'}, status=404)
+
+    if request.method == 'GET':
+        try:
+            return JsonResponse({'payment': _payment_to_dict(appointment.payment)})
+        except Payment.DoesNotExist:
+            return JsonResponse({'payment': None})
+
+    if request.method in ('POST', 'PUT'):
+        try:
+            payload = json.loads(request.body)
+        except Exception:
+            return JsonResponse({'detail': 'Invalid JSON'}, status=400)
+
+        paid_at = None
+        if payload.get('paid_at'):
+            from django.utils.dateparse import parse_datetime
+            paid_at = parse_datetime(payload['paid_at'])
+        elif payload.get('status') == 'PAID' and not payload.get('paid_at'):
+            paid_at = timezone.now()
+
+        try:
+            p = appointment.payment
+            p.amount = payload.get('amount', p.amount)
+            p.method = payload.get('method', p.method)
+            p.status = payload.get('status', p.status)
+            p.notes = (payload.get('notes') or p.notes or '').strip()
+            if paid_at is not None:
+                p.paid_at = paid_at
+            p.save()
+        except Payment.DoesNotExist:
+            p = Payment.objects.create(
+                appointment=appointment,
+                amount=payload.get('amount', 0),
+                method=payload.get('method', Payment.Method.CASH),
+                status=payload.get('status', Payment.Status.PENDING),
+                notes=(payload.get('notes') or '').strip(),
+                paid_at=paid_at,
+            )
+
+        return JsonResponse({'payment': _payment_to_dict(p)})
+
+    if request.method == 'DELETE':
+        try:
+            appointment.payment.delete()
+        except Payment.DoesNotExist:
+            pass
         return JsonResponse({'detail': 'Deleted'}, status=204)
 
     return JsonResponse({'detail': 'Method not allowed'}, status=405)

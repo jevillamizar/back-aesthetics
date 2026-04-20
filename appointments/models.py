@@ -3,11 +3,12 @@ from django.db import models
 
 class Appointment(models.Model):
     class Status(models.TextChoices):
-        SCHEDULED = 'SCHEDULED', 'Scheduled'
-        CONFIRMED = 'CONFIRMED', 'Confirmed'
-        COMPLETED = 'COMPLETED', 'Completed'
-        CANCELED = 'CANCELED', 'Canceled'
-        NO_SHOW = 'NO_SHOW', 'No show'
+        PENDING     = 'PENDING',     'Pendiente'
+        SCHEDULED   = 'SCHEDULED',   'Programada'
+        IN_PROGRESS = 'IN_PROGRESS', 'En curso'
+        COMPLETED   = 'COMPLETED',   'Completada'
+        CANCELED    = 'CANCELED',    'Cancelada'
+        NO_SHOW     = 'NO_SHOW',     'No asistió'
 
     patient = models.ForeignKey('patients.Patient', on_delete=models.PROTECT, related_name='appointments')
     doctor = models.ForeignKey(
@@ -45,3 +46,37 @@ class Appointment(models.Model):
 
     def __str__(self) -> str:
         return f"{self.starts_at} - {self.patient}"
+
+
+class Payment(models.Model):
+    class Method(models.TextChoices):
+        CASH     = 'CASH',     'Efectivo'
+        CARD     = 'CARD',     'Tarjeta'
+        TRANSFER = 'TRANSFER', 'Transferencia'
+        OTHER    = 'OTHER',    'Otro'
+
+    class Status(models.TextChoices):
+        PENDING  = 'PENDING',  'Pendiente'
+        PAID     = 'PAID',     'Pagado'
+        PARTIAL  = 'PARTIAL',  'Parcial'
+        REFUNDED = 'REFUNDED', 'Reembolsado'
+
+    appointment = models.OneToOneField(
+        'appointments.Appointment',
+        on_delete=models.CASCADE,
+        related_name='payment',
+    )
+    amount  = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    method  = models.CharField(max_length=20, choices=Method.choices, default=Method.CASH)
+    status  = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    notes   = models.TextField(blank=True)
+    paid_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Payment'
+        verbose_name_plural = 'Payments'
+
+    def __str__(self) -> str:
+        return f"Pago #{self.id} – {self.appointment} ({self.status})"
