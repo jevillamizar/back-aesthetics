@@ -51,6 +51,118 @@ def _require_staff(request):
     return user, None
 
 
+# ─── Profile ────────────────────────────────────────────────────────
+
+@csrf_exempt
+def admin_profile(request):
+    """GET/PUT /api/profile/ — read or update the logged-in admin's own data."""
+    user, err = _require_staff(request)
+    if err:
+        return err
+
+    if request.method == 'GET':
+        return JsonResponse({'profile': {
+            'id': user.pk,
+            'email': user.email,
+            'first_name': user.first_name,
+            'last_name': user.last_name,
+            'phone': user.phone,
+            'document_type': user.document_type,
+            'document_number': user.document_number,
+            'date_of_birth': user.date_of_birth.isoformat() if user.date_of_birth else None,
+            'role': user.role,
+        }})
+
+    if request.method == 'PUT':
+        try:
+            payload = json.loads(request.body.decode('utf-8') or '{}')
+        except json.JSONDecodeError:
+            return JsonResponse({'detail': 'Invalid JSON'}, status=400)
+
+        for f in ('first_name', 'last_name', 'phone', 'document_number'):
+            if f in payload:
+                setattr(user, f, (payload[f] or '').strip())
+        if 'document_type' in payload:
+            user.document_type = (payload['document_type'] or 'CC').strip()
+        if 'date_of_birth' in payload:
+            user.date_of_birth = payload['date_of_birth'] or None
+        if 'email' in payload:
+            new_email = (payload['email'] or '').strip()
+            if new_email and new_email != user.email:
+                if User.objects.filter(email=new_email).exists():
+                    return JsonResponse({'detail': 'El correo ya está en uso.'}, status=400)
+                user.email = new_email
+        if payload.get('new_password'):
+            if not payload.get('current_password'):
+                return JsonResponse({'detail': 'Debes ingresar tu contraseña actual.'}, status=400)
+            if not user.check_password(payload['current_password']):
+                return JsonResponse({'detail': 'Contraseña actual incorrecta.'}, status=400)
+            user.set_password(payload['new_password'].strip())
+        user.save()
+        return JsonResponse({'profile': {
+            'id': user.pk,
+            'email': user.email,
+            'first_name': user.first_name,
+            'last_name': user.last_name,
+            'phone': user.phone,
+            'document_type': user.document_type,
+            'document_number': user.document_number,
+            'date_of_birth': user.date_of_birth.isoformat() if user.date_of_birth else None,
+            'role': user.role,
+        }})
+
+    return JsonResponse({'detail': 'Method not allowed'}, status=405)
+
+
+@csrf_exempt
+def admin_clinic(request):
+    """GET/PUT /api/clinic/ — contact & identity fields from ClinicLanding."""
+    user, err = _require_admin(request)
+    if err:
+        return err
+
+    landing, _ = ClinicLanding.objects.get_or_create(defaults={})
+
+    CLINIC_FIELDS = ['phone', 'email', 'whatsapp_phone', 'address',
+                     'instagram_url', 'facebook_url', 'booking_url']
+
+    if request.method == 'GET':
+        from clinics.models import Clinic as _Clinic
+        clinic = _Clinic.objects.first()
+        return JsonResponse({'clinic': {
+            'name': clinic.name if clinic else '',
+            **{f: getattr(landing, f, '') or '' for f in CLINIC_FIELDS},
+        }})
+
+    if request.method == 'PUT':
+        try:
+            payload = json.loads(request.body.decode('utf-8') or '{}')
+        except json.JSONDecodeError:
+            return JsonResponse({'detail': 'Invalid JSON'}, status=400)
+
+        # Update clinic name on the tenant model
+        if 'name' in payload:
+            from clinics.models import Clinic as _Clinic
+            clinic = _Clinic.objects.first()
+            if clinic:
+                clinic.name = (payload['name'] or '').strip()
+                clinic.save(update_fields=['name'])
+
+        for f in CLINIC_FIELDS:
+            if f in payload:
+                setattr(landing, f, (payload[f] or '').strip())
+        landing.save()
+
+        from clinics.models import Clinic as _Clinic
+        clinic = _Clinic.objects.first()
+        return JsonResponse({'clinic': {
+            'name': clinic.name if clinic else '',
+            **{f: getattr(landing, f, '') or '' for f in CLINIC_FIELDS},
+        }})
+
+    return JsonResponse({'detail': 'Method not allowed'}, status=405)
+
+
 # ─── Doctor scheduling helpers ──────────────────────────────────────
 
 def check_doctor_conflict(doctor_id, starts_at, ends_at, exclude_appt_id=None):

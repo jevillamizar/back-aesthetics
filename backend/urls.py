@@ -20,6 +20,7 @@ from django.contrib import admin
 from django.urls import path
 
 from .admin_views import (
+    admin_clinic, admin_profile,
     admin_appointment_detail, admin_appointments,
     admin_appointment_payment, admin_appointment_consent,
     admin_consent_detail, admin_consents,
@@ -41,6 +42,8 @@ urlpatterns = [
     path('public/landing/', public_landing),
     path('api/auth/login/', auth_login),
     path('api/auth/me/', auth_me),
+    path('api/profile/', admin_profile),
+    path('api/clinic/', admin_clinic),
     path('api/landing/', admin_landing),
     path('api/treatments/', admin_treatments),
     path('api/treatments/<int:treatment_id>/', admin_treatment_detail),
