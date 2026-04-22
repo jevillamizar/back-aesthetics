@@ -1306,8 +1306,7 @@ def admin_revenue(request):
     if request.method != 'GET':
         return JsonResponse({'detail': 'Method not allowed'}, status=405)
 
-    from medical_records.models import MedicalRecord, MedicalRecordTreatment
-    from django.db.models import Sum, F, ExpressionWrapper, DecimalField as _Dec
+    from django.db.models import Sum, Count, F
     from django.db.models.functions import TruncMonth
 
     year = request.GET.get('year')
@@ -1316,75 +1315,120 @@ def admin_revenue(request):
     except ValueError:
         year = timezone.now().year
 
-    # Revenue from medical record treatment items
-    items_qs = MedicalRecordTreatment.objects.filter(
-        medical_record__appointment__starts_at__year=year,
-        medical_record__appointment__status=Appointment.Status.COMPLETED,
-    ).select_related('medical_record__appointment', 'treatment')
+    # ── Primary source: Payment records (PAID + PARTIAL) ──
+    pay_qs = Payment.objects.filter(
+        appointment__starts_at__year=year,
+        status__in=[Payment.Status.PAID, Payment.Status.PARTIAL],
+    ).select_related('appointment__doctor', 'appointment__treatment')
 
+    # Monthly breakdown from payments
+    monthly_raw = (
+        pay_qs
+        .annotate(month=TruncMonth('appointment__starts_at'))
+        .values('month')
+        .annotate(total=Sum('amount'))
+        .order_by('month')
+    )
+    monthly_map = {row['month'].strftime('%Y-%m'): float(row['total'] or 0) for row in monthly_raw}
+    monthly_full = [
+        {'month': f'{year}-{m:02d}', 'total': monthly_map.get(f'{year}-{m:02d}', 0)}
+        for m in range(1, 13)
+    ]
+    total_year = sum(r['total'] for r in monthly_full)
+
+    # Payment method breakdown
+    method_raw = (
+        pay_qs
+        .values('method')
+        .annotate(total=Sum('amount'), count=Count('id'))
+        .order_by('-total')
+    )
+    METHOD_LABELS = {'CASH': 'Efectivo', 'CARD': 'Tarjeta', 'TRANSFER': 'Transferencia', 'OTHER': 'Otro'}
+    payment_methods = [
+        {'method': r['method'], 'label': METHOD_LABELS.get(r['method'], r['method']),
+         'total': float(r['total'] or 0), 'count': r['count']}
+        for r in method_raw
+    ]
+
+    # Top doctors by payment amount
+    top_doctors_raw = (
+        pay_qs
+        .values(
+            first=F('appointment__doctor__first_name'),
+            last=F('appointment__doctor__last_name'),
+            email=F('appointment__doctor__email'),
+        )
+        .annotate(total=Sum('amount'))
+        .order_by('-total')[:6]
+    )
+    top_doctors_list = [
+        {'name': f"{r['first'] or ''} {r['last'] or ''}".strip() or r['email'] or 'Sin médico',
+         'total': float(r['total'] or 0)}
+        for r in top_doctors_raw
+    ]
+
+    # Top treatments: from appointment.treatment (quick) + HC items as fallback
+    from medical_records.models import MedicalRecordTreatment
+    from django.db.models import ExpressionWrapper, DecimalField as _Dec
+
+    # Treatments linked directly via appointment.treatment
+    treat_from_appt = (
+        pay_qs
+        .exclude(appointment__treatment__isnull=True)
+        .values(name=F('appointment__treatment__name'))
+        .annotate(total=Sum('amount'))
+        .order_by('-total')[:8]
+    )
+    treat_map: dict[str, float] = {}
+    for r in treat_from_appt:
+        treat_map[r['name']] = treat_map.get(r['name'], 0) + float(r['total'] or 0)
+
+    # Also aggregate from HC treatment items (completed appointments with payments)
     revenue_expr = ExpressionWrapper(
         F('price') * F('quantity'), output_field=_Dec(max_digits=14, decimal_places=2)
     )
-
-    # Monthly breakdown
-    monthly_raw = (
-        items_qs
-        .annotate(month=TruncMonth('medical_record__appointment__starts_at'))
-        .values('month')
-        .annotate(total=Sum(revenue_expr))
-        .order_by('month')
-    )
-    monthly = [
-        {'month': row['month'].strftime('%Y-%m'), 'total': float(row['total'] or 0)}
-        for row in monthly_raw
-    ]
-
-    # Fill missing months with 0
-    monthly_map = {r['month']: r['total'] for r in monthly}
-    monthly_full = []
-    for m in range(1, 13):
-        key = f'{year}-{m:02d}'
-        monthly_full.append({'month': key, 'total': monthly_map.get(key, 0)})
-
-    # Top treatments
-    top_treatments = (
-        items_qs
+    hc_treats = (
+        MedicalRecordTreatment.objects
+        .filter(medical_record__appointment__starts_at__year=year,
+                medical_record__appointment__payment__status__in=[
+                    Payment.Status.PAID, Payment.Status.PARTIAL])
         .values(name=F('treatment__name'))
         .annotate(total=Sum(revenue_expr))
         .order_by('-total')[:8]
     )
-    top_treatments_list = [{'name': r['name'], 'total': float(r['total'] or 0)} for r in top_treatments]
+    for r in hc_treats:
+        key = r['name'] or 'Sin nombre'
+        treat_map[key] = treat_map.get(key, 0) + float(r['total'] or 0)
 
-    # Top doctors
-    top_doctors = (
-        items_qs
-        .values(email=F('medical_record__doctor__email'),
-                first=F('medical_record__doctor__first_name'),
-                last=F('medical_record__doctor__last_name'))
-        .annotate(total=Sum(revenue_expr))
-        .order_by('-total')[:6]
-    )
-    top_doctors_list = [
-        {'name': f"{r['first']} {r['last']}".strip() or r['email'], 'total': float(r['total'] or 0)}
-        for r in top_doctors
-    ]
+    top_treatments_list = sorted(
+        [{'name': k, 'total': v} for k, v in treat_map.items()],
+        key=lambda x: x['total'], reverse=True
+    )[:8]
 
-    total_year = sum(r['total'] for r in monthly_full)
-
-    # Count of completed appointments for the year
+    # Completed appointments count
     completed_count = Appointment.objects.filter(
         starts_at__year=year,
         status=Appointment.Status.COMPLETED,
     ).count()
 
+    # Pending payments (registered but not yet paid)
+    pending_total = float(
+        Payment.objects.filter(
+            appointment__starts_at__year=year,
+            status=Payment.Status.PENDING,
+        ).aggregate(t=Sum('amount'))['t'] or 0
+    )
+
     return JsonResponse({
         'year': year,
         'total': total_year,
+        'pending': pending_total,
         'completed_appointments': completed_count,
         'avg_per_appointment': round(total_year / completed_count, 2) if completed_count else 0,
         'monthly': monthly_full,
         'top_treatments': top_treatments_list,
         'top_doctors': top_doctors_list,
+        'payment_methods': payment_methods,
     })
 
 
