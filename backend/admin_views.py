@@ -22,7 +22,7 @@ BUFFER_MINUTES = 5
 
 ALLOWED_TRANSITIONS = {
     Appointment.Status.SCHEDULED:   {Appointment.Status.CONFIRMED, Appointment.Status.CANCELED, Appointment.Status.NO_SHOW},
-    Appointment.Status.CONFIRMED:   {Appointment.Status.IN_PROGRESS, Appointment.Status.CANCELED},
+    Appointment.Status.CONFIRMED:   {Appointment.Status.IN_PROGRESS, Appointment.Status.CANCELED, Appointment.Status.NO_SHOW},
     Appointment.Status.IN_PROGRESS: {Appointment.Status.COMPLETED, Appointment.Status.CANCELED},
     Appointment.Status.COMPLETED:   set(),
     Appointment.Status.CANCELED:    set(),
@@ -595,10 +595,22 @@ def admin_appointment_detail(request, appointment_id):
             if not has_consent:
                 return JsonResponse({'detail': 'Se requiere consentimiento firmado para confirmar.'}, status=400)
 
-        # CONFIRMED → IN_PROGRESS: require doctor, auto-create MedicalRecord
+        # CONFIRMED → IN_PROGRESS: require doctor + time window (15 min before → ends_at)
         if new_status == Appointment.Status.IN_PROGRESS:
             if not a.doctor_id:
                 return JsonResponse({'detail': 'Se requiere un médico asignado para iniciar consulta.'}, status=400)
+            now = timezone.now()
+            window_start = a.starts_at - timedelta(minutes=15)
+            window_end = a.ends_at
+            if now < window_start:
+                minutes_left = int((window_start - now).total_seconds() / 60)
+                return JsonResponse({
+                    'detail': f'Aún no es hora de iniciar. Puede iniciar desde 15 min antes de la cita (faltan {minutes_left} min).'
+                }, status=400)
+            if now > window_end:
+                return JsonResponse({
+                    'detail': 'La ventana para iniciar esta cita ya pasó. Marque como No Asistió o cancele.'
+                }, status=400)
             try:
                 a.medical_record
             except Exception:
