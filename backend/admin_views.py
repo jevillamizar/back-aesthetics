@@ -1,6 +1,7 @@
 import json
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
+from django.db.models import Q
 from django.http import JsonResponse
 from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
@@ -10,7 +11,11 @@ from landing.models import ClinicLanding
 from medical_records.models import Consent, MedicalRecord
 from patients.models import Patient
 from treatments.models import Treatment
+from users.models import User
 from .auth_views import get_auth_user
+
+
+BUFFER_MINUTES = 5
 
 
 # ─── Status transition rules ────────────────────────────────────────
@@ -34,6 +39,39 @@ def _require_admin(request):
     if user.role not in ('ADMIN',):
         return None, JsonResponse({'detail': 'Forbidden'}, status=403)
     return user, None
+
+
+def _require_staff(request):
+    """Like _require_admin but also accepts DOCTOR role."""
+    user = get_auth_user(request)
+    if user is None:
+        return None, JsonResponse({'detail': 'Not authenticated'}, status=401)
+    if user.role not in ('ADMIN', 'DOCTOR'):
+        return None, JsonResponse({'detail': 'Forbidden'}, status=403)
+    return user, None
+
+
+# ─── Doctor scheduling helpers ──────────────────────────────────────
+
+def check_doctor_conflict(doctor_id, starts_at, ends_at, exclude_appt_id=None):
+    """Return the first conflicting appointment or None.
+
+    A conflict exists when a doctor's existing appointment (not canceled/no-show)
+    overlaps with [starts_at, ends_at] considering a 5-minute buffer on each side.
+    """
+    buf = timedelta(minutes=BUFFER_MINUTES)
+    qs = (
+        Appointment.objects
+        .filter(doctor_id=doctor_id)
+        .exclude(status__in=[Appointment.Status.CANCELED, Appointment.Status.NO_SHOW])
+        .filter(
+            starts_at__lt=ends_at + buf,
+            ends_at__gt=starts_at - buf,
+        )
+    )
+    if exclude_appt_id:
+        qs = qs.exclude(id=exclude_appt_id)
+    return qs.select_related('patient').first()
 
 
 # ─── Landing ────────────────────────────────────────────────────────
@@ -225,7 +263,7 @@ def admin_treatment_detail(request, treatment_id):
 
 @csrf_exempt
 def admin_dashboard(request):
-    user, err = _require_admin(request)
+    user, err = _require_staff(request)
     if err:
         return err
 
@@ -238,13 +276,19 @@ def admin_dashboard(request):
     today_end = now.replace(hour=23, minute=59, second=59, microsecond=999999)
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
+    doctor_filter = {}
+    if user.role == 'DOCTOR':
+        doctor_filter = {'doctor_id': user.pk}
+
     appointments_today = Appointment.objects.filter(
         starts_at__gte=today_start,
         starts_at__lte=today_end,
+        **doctor_filter,
     ).exclude(status=Appointment.Status.CANCELED).count()
 
     appointments_month = Appointment.objects.filter(
         starts_at__gte=month_start,
+        **doctor_filter,
     ).exclude(status=Appointment.Status.CANCELED).count()
 
     patients_total = Patient.objects.count()
@@ -257,7 +301,7 @@ def admin_dashboard(request):
     upcoming = (
         Appointment.objects
         .select_related('patient', 'treatment', 'doctor')
-        .filter(starts_at__gte=month_start, starts_at__lte=month_end)
+        .filter(starts_at__gte=month_start, starts_at__lte=month_end, **doctor_filter)
         .exclude(status=Appointment.Status.CANCELED)
         .order_by('starts_at')
     )
@@ -359,7 +403,7 @@ def _appointment_to_dict(a):
 
 @csrf_exempt
 def admin_appointments(request):
-    user, err = _require_admin(request)
+    user, err = _require_staff(request)
     if err:
         return err
 
@@ -371,6 +415,9 @@ def admin_appointments(request):
             .prefetch_related('payment', 'medical_record__consents')
             .order_by('starts_at')
         )
+        # DOCTOR users can only see their own appointments
+        if user.role == 'DOCTOR':
+            qs = qs.filter(doctor_id=user.pk)
         status_filter = request.GET.get('status')
         if status_filter:
             qs = qs.filter(status=status_filter)
@@ -406,6 +453,8 @@ def admin_appointments(request):
                 .filter(status__in=['COMPLETED', 'CANCELED', 'NO_SHOW'])
                 .order_by('-starts_at')
             )
+            if user.role == 'DOCTOR':
+                qs = qs.filter(doctor_id=user.pk)
         return JsonResponse({'appointments': [_appointment_to_dict(a) for a in qs]})
 
     if request.method == 'POST':
@@ -441,13 +490,17 @@ def admin_appointments(request):
             except Treatment.DoesNotExist:
                 return JsonResponse({'detail': 'treatment not found'}, status=400)
 
-        from users.models import User
         doctor = None
         if payload.get('doctor_id'):
             try:
-                doctor = User.objects.get(id=payload['doctor_id'])
+                doctor = User.objects.get(id=payload['doctor_id'], role=User.Role.DOCTOR)
             except User.DoesNotExist:
-                pass
+                return JsonResponse({'detail': 'Doctor no encontrado'}, status=400)
+            conflict = check_doctor_conflict(doctor.id, starts_at, ends_at)
+            if conflict:
+                return JsonResponse({
+                    'detail': f'Conflicto de horario: el doctor ya tiene una cita ({conflict.patient}) de {conflict.starts_at.strftime("%H:%M")} a {conflict.ends_at.strftime("%H:%M")}.'
+                }, status=409)
 
         a = Appointment.objects.create(
             patient=patient,
@@ -469,7 +522,7 @@ def admin_appointments(request):
 
 @csrf_exempt
 def admin_appointment_detail(request, appointment_id):
-    user, err = _require_admin(request)
+    user, err = _require_staff(request)
     if err:
         return err
 
@@ -477,6 +530,10 @@ def admin_appointment_detail(request, appointment_id):
         a = Appointment.objects.select_related('patient', 'treatment', 'doctor').prefetch_related('payment', 'medical_record__consents').get(id=appointment_id)
     except Appointment.DoesNotExist:
         return JsonResponse({'detail': 'Not found'}, status=404)
+
+    # DOCTOR can only access their own appointments
+    if user.role == 'DOCTOR' and a.doctor_id != user.pk:
+        return JsonResponse({'detail': 'Forbidden'}, status=403)
 
     if request.method == 'GET':
         return JsonResponse({'appointment': _appointment_to_dict(a)})
@@ -497,6 +554,19 @@ def admin_appointment_detail(request, appointment_id):
                 {'detail': f'Transición no permitida: {a.status} → {new_status}. Permitidas: {", ".join(allowed) or "ninguna"}'},
                 status=400,
             )
+
+        # Accept optional doctor_id assignment
+        if 'doctor_id' in payload and payload['doctor_id']:
+            try:
+                doctor = User.objects.get(id=payload['doctor_id'], role=User.Role.DOCTOR)
+            except User.DoesNotExist:
+                return JsonResponse({'detail': 'Doctor no encontrado'}, status=400)
+            conflict = check_doctor_conflict(doctor.id, a.starts_at, a.ends_at, exclude_appt_id=a.id)
+            if conflict:
+                return JsonResponse({
+                    'detail': f'Conflicto de horario: el doctor ya tiene una cita ({conflict.patient}) de {conflict.starts_at.strftime("%H:%M")} a {conflict.ends_at.strftime("%H:%M")}.'
+                }, status=409)
+            a.doctor = doctor
 
         # SCHEDULED → CONFIRMED: require payment (PAID or PARTIAL) + signed consent
         if new_status == Appointment.Status.CONFIRMED:
@@ -548,7 +618,7 @@ def admin_appointment_detail(request, appointment_id):
                 return JsonResponse({'detail': 'Se requiere historia clínica para completar la cita.'}, status=400)
 
         a.status = new_status
-        a.save(update_fields=['status', 'updated_at'])
+        a.save(update_fields=['status', 'doctor_id', 'updated_at'])
         a = Appointment.objects.select_related('patient', 'treatment', 'doctor').prefetch_related('payment', 'medical_record__consents').get(id=appointment_id)
         return JsonResponse({'appointment': _appointment_to_dict(a)})
 
@@ -591,6 +661,21 @@ def admin_appointment_detail(request, appointment_id):
                 a.patient = Patient.objects.get(id=payload['patient_id'])
             except Patient.DoesNotExist:
                 return JsonResponse({'detail': 'patient not found'}, status=400)
+        if 'doctor_id' in payload:
+            if payload['doctor_id']:
+                try:
+                    a.doctor = User.objects.get(id=payload['doctor_id'], role=User.Role.DOCTOR)
+                except User.DoesNotExist:
+                    return JsonResponse({'detail': 'Doctor no encontrado'}, status=400)
+            else:
+                a.doctor = None
+        # Validate doctor conflict after all fields are set
+        if a.doctor_id:
+            conflict = check_doctor_conflict(a.doctor_id, a.starts_at, a.ends_at, exclude_appt_id=a.id)
+            if conflict:
+                return JsonResponse({
+                    'detail': f'Conflicto de horario: el doctor ya tiene una cita ({conflict.patient}) de {conflict.starts_at.strftime("%H:%M")} a {conflict.ends_at.strftime("%H:%M")}.'
+                }, status=409)
         a.save()
         a.refresh_from_db()
         a = Appointment.objects.select_related('patient', 'treatment', 'doctor').prefetch_related('payment', 'medical_record__consents').get(id=appointment_id)
@@ -607,7 +692,7 @@ def admin_appointment_detail(request, appointment_id):
 
 @csrf_exempt
 def admin_appointment_payment(request, appointment_id):
-    user, err = _require_admin(request)
+    user, err = _require_staff(request)
     if err:
         return err
 
@@ -681,7 +766,7 @@ def admin_appointment_payment(request, appointment_id):
 @csrf_exempt
 def admin_appointment_consent(request, appointment_id):
     """Create/retrieve a consent tied to a specific appointment's patient."""
-    user, err = _require_admin(request)
+    user, err = _require_staff(request)
     if err:
         return err
 
@@ -773,7 +858,7 @@ def _patient_to_dict(p, request=None):
 
 @csrf_exempt
 def admin_patients(request):
-    user, err = _require_admin(request)
+    user, err = _require_staff(request)
     if err:
         return err
 
@@ -1043,6 +1128,50 @@ def admin_doctor_detail(request, doctor_id):
     return JsonResponse({'detail': 'Method not allowed'}, status=405)
 
 
+@csrf_exempt
+def admin_doctor_availability(request, doctor_id):
+    """GET /api/doctors/<id>/availability/?date=YYYY-MM-DD
+    Returns appointments for this doctor on the given date."""
+    user, err = _require_admin(request)
+    if err:
+        return err
+    if request.method != 'GET':
+        return JsonResponse({'detail': 'Method not allowed'}, status=405)
+
+    from django.utils.dateparse import parse_date as _pd
+    d = _pd(request.GET.get('date', ''))
+    if not d:
+        d = timezone.now().date()
+
+    try:
+        User.objects.get(id=doctor_id, role=User.Role.DOCTOR)
+    except User.DoesNotExist:
+        return JsonResponse({'detail': 'Doctor not found'}, status=404)
+
+    appts = (
+        Appointment.objects
+        .filter(doctor_id=doctor_id, starts_at__date=d)
+        .exclude(status__in=[Appointment.Status.CANCELED, Appointment.Status.NO_SHOW])
+        .select_related('patient', 'treatment')
+        .order_by('starts_at')
+    )
+    slots = []
+    for a in appts:
+        slots.append({
+            'id': a.id,
+            'starts_at': a.starts_at.isoformat(),
+            'ends_at': a.ends_at.isoformat(),
+            'status': a.status,
+            'patient_name': f"{a.patient.first_name} {a.patient.last_name}".strip() if a.patient else '—',
+            'treatment_name': a.treatment.name if a.treatment else None,
+        })
+    return JsonResponse({
+        'date': d.isoformat(),
+        'buffer_minutes': BUFFER_MINUTES,
+        'appointments': slots,
+    })
+
+
 # ─── Revenue ──────────────────────────────────────────────────────────
 
 @csrf_exempt
@@ -1182,7 +1311,7 @@ def _medical_record_to_dict(rec):
 
 @csrf_exempt
 def admin_medical_records(request):
-    user, err = _require_admin(request)
+    user, err = _require_staff(request)
     if err:
         return err
 
@@ -1283,7 +1412,7 @@ def admin_medical_records(request):
 
 @csrf_exempt
 def admin_medical_record_detail(request, record_id):
-    user, err = _require_admin(request)
+    user, err = _require_staff(request)
     if err:
         return err
 
@@ -1543,7 +1672,7 @@ def _payment_to_dict(p):
 @csrf_exempt
 def admin_appointment_payment(request, appointment_id):
     """GET/POST/PUT the payment for a specific appointment."""
-    admin, err = _require_admin(request)
+    admin, err = _require_staff(request)
     if err:
         return err
 
