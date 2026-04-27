@@ -147,7 +147,7 @@ def public_treatments(request):
     treatments = (
         Treatment.objects.filter(is_active=True)
         .order_by('category', 'name')
-        .values('id', 'name', 'slug', 'category', 'description', 'duration_minutes', 'price')
+        .values('id', 'name', 'slug', 'category', 'description', 'long_description', 'duration_minutes', 'price', 'image_url')
     )
 
     return JsonResponse({'results': list(treatments)})
@@ -203,6 +203,7 @@ def public_landing(request):
                     'font_accent': landing.font_accent,
                     'logo_url': logo_url,
                     'hero_image_url': hero_image_url,
+                    'hero_image_urls': landing.hero_image_urls or [],
                     'trust_indicators': landing.trust_indicators or [],
                     'testimonials': landing.testimonials or [],
                     'about_title': landing.about_title,
@@ -210,6 +211,7 @@ def public_landing(request):
                     'about_description': landing.about_description,
                     'about_bullets': landing.about_bullets or [],
                     'about_image_url': about_image_url,
+                    'about_image_urls': landing.about_image_urls or [],
                     'about_badge_title': landing.about_badge_title,
                     'about_badge_text': landing.about_badge_text,
                     'phone': landing.phone,

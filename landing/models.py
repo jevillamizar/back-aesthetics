@@ -15,6 +15,11 @@ class ClinicLanding(models.Model):
     font_accent = models.CharField(max_length=100, blank=True, help_text='Google Font name for decorative text, e.g. "Cormorant Garamond"')
     logo = models.ImageField(upload_to='landing/', blank=True)
     hero_image = models.ImageField(upload_to='landing/', blank=True)
+    hero_image_urls = models.JSONField(
+        default=list,
+        blank=True,
+        help_text='Array of image URLs for hero carousel, e.g. ["https://...", "https://..."]',
+    )
 
     trust_indicators = models.JSONField(
         default=list,
@@ -36,6 +41,11 @@ class ClinicLanding(models.Model):
         help_text='Array of strings: ["Dermatólogos certificados", "Tratamientos aprobados", …]',
     )
     about_image = models.ImageField(upload_to='landing/', blank=True, help_text='About section image')
+    about_image_urls = models.JSONField(
+        default=list,
+        blank=True,
+        help_text='Array of image URLs for about carousel',
+    )
     about_badge_title = models.CharField(max_length=50, blank=True, help_text='Floating badge big text, e.g. "Top 1%"')
     about_badge_text = models.CharField(max_length=255, blank=True, help_text='Floating badge description')
 

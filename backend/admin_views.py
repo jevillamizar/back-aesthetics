@@ -200,6 +200,7 @@ LANDING_TEXT_FIELDS = [
 
 LANDING_JSON_FIELDS = [
     'trust_indicators', 'testimonials', 'about_bullets',
+    'hero_image_urls', 'about_image_urls',
 ]
 
 LANDING_BOOL_FIELDS = ['is_published']
@@ -295,6 +296,8 @@ def _treatment_to_dict(t):
         'duration_minutes': t.duration_minutes,
         'price': str(t.price) if t.price is not None else None,
         'is_active': t.is_active,
+        'image_url': t.image_url or '',
+        'long_description': t.long_description or '',
     }
 
 
@@ -323,9 +326,11 @@ def admin_treatments(request):
             slug=payload.get('slug', '').strip() or None,
             category=payload.get('category', '').strip(),
             description=payload.get('description', '').strip(),
+            long_description=payload.get('long_description', '').strip(),
             duration_minutes=payload.get('duration_minutes') or 30,
             price=payload.get('price'),
             is_active=payload.get('is_active', True),
+            image_url=payload.get('image_url', '').strip(),
         )
         return JsonResponse({'treatment': _treatment_to_dict(t)}, status=201)
 
@@ -352,7 +357,7 @@ def admin_treatment_detail(request, treatment_id):
         except json.JSONDecodeError:
             return JsonResponse({'detail': 'Invalid JSON'}, status=400)
 
-        for field in ('name', 'slug', 'category', 'description'):
+        for field in ('name', 'slug', 'category', 'description', 'long_description', 'image_url'):
             if field in payload:
                 setattr(t, field, (payload[field] or '').strip())
         if 'duration_minutes' in payload:
@@ -1897,3 +1902,34 @@ def admin_appointment_payment(request, appointment_id):
         return JsonResponse({'detail': 'Deleted'}, status=204)
 
     return JsonResponse({'detail': 'Method not allowed'}, status=405)
+
+
+# ─── Generic image upload ────────────────────────────────────────────
+
+@csrf_exempt
+def admin_upload_image(request):
+    user, err = _require_admin(request)
+    if err:
+        return err
+    if request.method != 'POST':
+        return JsonResponse({'detail': 'Method not allowed'}, status=405)
+
+    import os
+    import uuid
+    from django.core.files.storage import default_storage
+    from django.core.files.base import ContentFile
+
+    uploaded = request.FILES.get('file')
+    if not uploaded:
+        return JsonResponse({'detail': 'No file provided'}, status=400)
+
+    ext = os.path.splitext(uploaded.name)[1].lower()
+    allowed = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg'}
+    if ext not in allowed:
+        return JsonResponse({'detail': 'Tipo de archivo no permitido'}, status=400)
+
+    filename = f'uploads/{uuid.uuid4().hex}{ext}'
+    path = default_storage.save(filename, ContentFile(uploaded.read()))
+    url = request.build_absolute_uri(default_storage.url(path))
+
+    return JsonResponse({'url': url})
