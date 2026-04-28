@@ -11,6 +11,10 @@ class Appointment(models.Model):
         CANCELED    = 'CANCELED',    'Cancelada'
         NO_SHOW     = 'NO_SHOW',     'No asistió'
 
+    class AppointmentType(models.TextChoices):
+        VALORACION  = 'VALORACION',  'Valoración'
+        TRATAMIENTO = 'TRATAMIENTO', 'Tratamiento'
+
     patient = models.ForeignKey('patients.Patient', on_delete=models.PROTECT, related_name='appointments')
     doctor = models.ForeignKey(
         'users.User',
@@ -27,10 +31,16 @@ class Appointment(models.Model):
         blank=True,
     )
 
+    appointment_type = models.CharField(
+        max_length=20,
+        choices=AppointmentType.choices,
+        default=AppointmentType.TRATAMIENTO,
+    )
     starts_at = models.DateTimeField()
     ends_at = models.DateTimeField()
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.SCHEDULED)
     notes = models.TextField(blank=True)
+    google_event_id = models.CharField(max_length=255, blank=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

@@ -26,14 +26,24 @@ from .admin_views import (
     admin_consent_detail, admin_consents,
     admin_dashboard, admin_landing,
     admin_doctor_availability, admin_doctor_detail, admin_doctors,
+    admin_lead_detail, admin_leads,
     admin_medical_record_detail, admin_medical_records,
     admin_patient_detail, admin_patients,
     admin_revenue,
     admin_treatment_detail, admin_treatments,
     admin_upload_image,
 )
+from gcal.views import gcal_connect, gcal_disconnect, gcal_oauth2callback, gcal_set_calendar, gcal_status
+
 from .auth_views import auth_login, auth_me
-from .views import public_create_appointment, public_landing, public_treatments, tenant_debug
+from .views import (
+    public_availability,
+    public_create_appointment,
+    public_create_lead,
+    public_landing,
+    public_treatments,
+    tenant_debug,
+)
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -41,6 +51,13 @@ urlpatterns = [
     path('public/appointments/', public_create_appointment),
     path('public/treatments/', public_treatments),
     path('public/landing/', public_landing),
+    path('public/availability/', public_availability),
+    path('public/leads/', public_create_lead),
+    path('api/gcal/connect/', gcal_connect),
+    path('api/gcal/oauth2callback/', gcal_oauth2callback),
+    path('api/gcal/status/', gcal_status),
+    path('api/gcal/calendar/', gcal_set_calendar),
+    path('api/gcal/disconnect/', gcal_disconnect),
     path('api/auth/login/', auth_login),
     path('api/auth/me/', auth_me),
     path('api/profile/', admin_profile),
@@ -60,6 +77,8 @@ urlpatterns = [
     path('api/doctors/<int:doctor_id>/availability/', admin_doctor_availability),
     path('api/revenue/', admin_revenue),
     path('api/upload-image/', admin_upload_image),
+    path('api/leads/', admin_leads),
+    path('api/leads/<int:lead_id>/', admin_lead_detail),
     path('api/medical-records/', admin_medical_records),
     path('api/medical-records/<int:record_id>/', admin_medical_record_detail),
     path('api/consents/', admin_consents),

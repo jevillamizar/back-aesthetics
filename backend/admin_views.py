@@ -8,6 +8,7 @@ from django.views.decorators.csrf import csrf_exempt
 
 from appointments.models import Appointment, Payment
 from landing.models import ClinicLanding
+from leads.models import Lead
 from medical_records.models import Consent, MedicalRecord
 from patients.models import Patient
 from treatments.models import Treatment
@@ -1899,6 +1900,129 @@ def admin_appointment_payment(request, appointment_id):
             appointment.payment.delete()
         except Payment.DoesNotExist:
             pass
+        return JsonResponse({'detail': 'Deleted'}, status=204)
+
+    return JsonResponse({'detail': 'Method not allowed'}, status=405)
+
+
+# ─── Leads ──────────────────────────────────────────────────────────
+
+@csrf_exempt
+def admin_leads(request):
+    user, err = _require_staff(request)
+    if err:
+        return err
+
+    if request.method == 'GET':
+        status_filter = request.GET.get('status', '')
+        source_filter = request.GET.get('source', '')
+        search        = (request.GET.get('search') or '').strip()
+
+        qs = Lead.objects.select_related('appointment', 'patient').order_by('-created_at')
+
+        if status_filter:
+            qs = qs.filter(status=status_filter)
+        if source_filter:
+            qs = qs.filter(source=source_filter)
+        if search:
+            qs = qs.filter(
+                Q(first_name__icontains=search)
+                | Q(last_name__icontains=search)
+                | Q(phone__icontains=search)
+                | Q(email__icontains=search)
+            )
+
+        def _serialize(lead):
+            appt = lead.appointment
+            return {
+                'id':             lead.id,
+                'first_name':     lead.first_name,
+                'last_name':      lead.last_name,
+                'phone':          lead.phone,
+                'email':          lead.email,
+                'interest_notes': lead.interest_notes,
+                'source':         lead.source,
+                'status':         lead.status,
+                'patient_id':     lead.patient_id,
+                'appointment': (
+                    None if appt is None else {
+                        'id':       appt.id,
+                        'starts_at': appt.starts_at.isoformat(),
+                        'ends_at':   appt.ends_at.isoformat(),
+                        'status':    appt.status,
+                        'appointment_type': appt.appointment_type,
+                    }
+                ),
+                'notes':      lead.notes,
+                'created_at': lead.created_at.isoformat(),
+                'updated_at': lead.updated_at.isoformat(),
+            }
+
+        return JsonResponse({'results': [_serialize(l) for l in qs]})
+
+    return JsonResponse({'detail': 'Method not allowed'}, status=405)
+
+
+@csrf_exempt
+def admin_lead_detail(request, lead_id):
+    user, err = _require_staff(request)
+    if err:
+        return err
+
+    try:
+        lead = Lead.objects.select_related('appointment', 'patient').get(id=lead_id)
+    except Lead.DoesNotExist:
+        return JsonResponse({'detail': 'Not found'}, status=404)
+
+    if request.method == 'GET':
+        appt = lead.appointment
+        return JsonResponse({
+            'id':             lead.id,
+            'first_name':     lead.first_name,
+            'last_name':      lead.last_name,
+            'phone':          lead.phone,
+            'email':          lead.email,
+            'interest_notes': lead.interest_notes,
+            'source':         lead.source,
+            'status':         lead.status,
+            'patient_id':     lead.patient_id,
+            'appointment': (
+                None if appt is None else {
+                    'id':               appt.id,
+                    'starts_at':        appt.starts_at.isoformat(),
+                    'ends_at':          appt.ends_at.isoformat(),
+                    'status':           appt.status,
+                    'appointment_type': appt.appointment_type,
+                    'google_event_id':  appt.google_event_id,
+                }
+            ),
+            'notes':      lead.notes,
+            'created_at': lead.created_at.isoformat(),
+            'updated_at': lead.updated_at.isoformat(),
+        })
+
+    if request.method == 'PATCH':
+        try:
+            payload = json.loads(request.body.decode('utf-8') or '{}')
+        except json.JSONDecodeError:
+            return JsonResponse({'detail': 'Invalid JSON'}, status=400)
+
+        allowed_status = {s.value for s in Lead.Status}
+        new_status = payload.get('status')
+        if new_status is not None:
+            if new_status not in allowed_status:
+                return JsonResponse({'detail': f'Invalid status. Choices: {allowed_status}'}, status=400)
+            lead.status = new_status
+
+        for field in ('notes', 'interest_notes', 'phone', 'email'):
+            if field in payload:
+                setattr(lead, field, (payload[field] or '').strip())
+
+        lead.save()
+        return JsonResponse({'detail': 'Updated', 'status': lead.status})
+
+    if request.method == 'DELETE':
+        lead.delete()
         return JsonResponse({'detail': 'Deleted'}, status=204)
 
     return JsonResponse({'detail': 'Method not allowed'}, status=405)
