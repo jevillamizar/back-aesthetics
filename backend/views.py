@@ -157,7 +157,7 @@ def public_treatments(request):
 
 def public_availability(request):
     """
-    GET /public/availability/?date=YYYY-MM-DD
+    GET /public/availability/?date=YYYY-MM-DD[&duration=60]
     Returns free slots for the given date using Google Calendar freebusy.
     Falls back to an empty list if GCal is not connected.
     """
@@ -173,8 +173,13 @@ def public_availability(request):
         return JsonResponse({'detail': 'date must be YYYY-MM-DD'}, status=400)
 
     try:
+        duration_minutes = max(15, int(request.GET.get('duration') or 0))
+    except (ValueError, TypeError):
+        duration_minutes = 0  # fallback to service default
+
+    try:
         from gcal.service import get_free_slots
-        slots = get_free_slots(target_date)
+        slots = get_free_slots(target_date, duration_minutes=duration_minutes or None)
     except Exception:
         slots = []
 

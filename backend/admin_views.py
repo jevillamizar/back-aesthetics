@@ -22,13 +22,34 @@ BUFFER_MINUTES = 5
 # ─── Status transition rules ────────────────────────────────────────
 
 ALLOWED_TRANSITIONS = {
-    Appointment.Status.SCHEDULED:   {Appointment.Status.CONFIRMED, Appointment.Status.CANCELED, Appointment.Status.NO_SHOW},
-    Appointment.Status.CONFIRMED:   {Appointment.Status.IN_PROGRESS, Appointment.Status.CANCELED, Appointment.Status.NO_SHOW},
+    # Nuevo flujo simplificado
+    # Valoración:   PENDING → COMPLETED (asistida) | NO_SHOW
+    # Procedimiento: PENDING → IN_PROGRESS (atendida) | NO_SHOW
+    #               IN_PROGRESS → COMPLETED
+    Appointment.Status.PENDING:     {
+        Appointment.Status.COMPLETED,
+        Appointment.Status.IN_PROGRESS,
+        Appointment.Status.NO_SHOW,
+        Appointment.Status.CANCELED,
+    },
     Appointment.Status.IN_PROGRESS: {Appointment.Status.COMPLETED, Appointment.Status.CANCELED},
     Appointment.Status.COMPLETED:   set(),
     Appointment.Status.CANCELED:    set(),
     Appointment.Status.NO_SHOW:     set(),
-    Appointment.Status.PENDING:     {Appointment.Status.SCHEDULED, Appointment.Status.CANCELED},
+    Appointment.Status.EXPIRED:     set(),
+    # Legacy — por si existen citas antiguas en estos estados
+    Appointment.Status.SCHEDULED:   {
+        Appointment.Status.COMPLETED,
+        Appointment.Status.IN_PROGRESS,
+        Appointment.Status.NO_SHOW,
+        Appointment.Status.CANCELED,
+    },
+    Appointment.Status.CONFIRMED:   {
+        Appointment.Status.COMPLETED,
+        Appointment.Status.IN_PROGRESS,
+        Appointment.Status.NO_SHOW,
+        Appointment.Status.CANCELED,
+    },
 }
 
 
@@ -398,6 +419,8 @@ def admin_dashboard(request):
     if user.role == 'DOCTOR':
         doctor_filter = {'doctor_id': user.pk}
 
+    from django.db.models import Sum
+
     appointments_today = Appointment.objects.filter(
         starts_at__gte=today_start,
         starts_at__lte=today_end,
@@ -411,6 +434,66 @@ def admin_dashboard(request):
 
     patients_total = Patient.objects.count()
     treatments_active = Treatment.objects.filter(is_active=True).count()
+
+    # ── New stats ──────────────────────────────────────────────────────
+    valoraciones_no_asistidas = Appointment.objects.filter(
+        appointment_type=Appointment.AppointmentType.VALORACION,
+        status=Appointment.Status.NO_SHOW,
+        **doctor_filter,
+    ).count()
+
+    procedimientos_atendidos = Appointment.objects.filter(
+        appointment_type=Appointment.AppointmentType.TRATAMIENTO,
+        status=Appointment.Status.COMPLETED,
+        **doctor_filter,
+    ).count()
+
+    procedimientos_pendientes = Appointment.objects.filter(
+        appointment_type=Appointment.AppointmentType.TRATAMIENTO,
+        starts_at__gte=today_start,
+        starts_at__lte=today_end,
+        **doctor_filter,
+    ).exclude(
+        status__in=[Appointment.Status.COMPLETED, Appointment.Status.CANCELED]
+    ).count()
+
+    ingresos_hoy = float(
+        Payment.objects.filter(
+            appointment__starts_at__gte=today_start,
+            appointment__starts_at__lte=today_end,
+            status__in=[Payment.Status.PAID, Payment.Status.PARTIAL],
+        ).aggregate(t=Sum('amount'))['t'] or 0
+    )
+
+    # ── Today's appointments (full detail) ────────────────────────────
+    today_appts_qs = (
+        Appointment.objects
+        .select_related('patient', 'treatment', 'doctor')
+        .prefetch_related('payment')
+        .filter(starts_at__gte=today_start, starts_at__lte=today_end, **doctor_filter)
+        .order_by('starts_at')
+    )
+
+    today_appointments = []
+    for a in today_appts_qs:
+        pay = getattr(a, 'payment', None)
+        today_appointments.append({
+            'id': a.id,
+            'starts_at': a.starts_at.isoformat(),
+            'ends_at': a.ends_at.isoformat(),
+            'status': a.status,
+            'appointment_type': a.appointment_type,
+            'treatment_name': a.treatment.name if a.treatment else ('Valoración' if a.appointment_type == 'VALORACION' else '—'),
+            'patient_name': f"{a.patient.first_name} {a.patient.last_name}".strip() if a.patient else '—',
+            'patient_id': a.patient_id,
+            'notes': a.notes or '',
+            'doctor_id': a.doctor_id,
+            'doctor_name': (
+                f"{a.doctor.first_name} {a.doctor.last_name}".strip() or a.doctor.email
+            ) if a.doctor else '—',
+            'payment_status': pay.status if pay else None,
+            'payment_amount': float(pay.amount) if pay else None,
+        })
 
     import calendar as _cal
     last_day = _cal.monthrange(now.year, now.month)[1]
@@ -444,7 +527,12 @@ def admin_dashboard(request):
             'appointments_month': appointments_month,
             'patients_total': patients_total,
             'treatments_active': treatments_active,
+            'valoraciones_no_asistidas': valoraciones_no_asistidas,
+            'procedimientos_atendidos': procedimientos_atendidos,
+            'procedimientos_pendientes': procedimientos_pendientes,
+            'ingresos_hoy': ingresos_hoy,
         },
+        'today_appointments': today_appointments,
         'upcoming_appointments': upcoming_list,
     })
 
@@ -452,12 +540,26 @@ def admin_dashboard(request):
 # ─── Appointments ────────────────────────────────────────────────────
 
 def _auto_no_show():
+    """Auto-update statuses for overdue appointments."""
     from django.utils import timezone as _tz
     _now = _tz.now()
+    active_statuses = [
+        Appointment.Status.PENDING,
+        Appointment.Status.SCHEDULED,
+        Appointment.Status.CONFIRMED,
+    ]
+    # Valoraciones vencidas → NO_SHOW
     Appointment.objects.filter(
-        starts_at__lt=_now,
-        status=Appointment.Status.SCHEDULED,
+        ends_at__lt=_now,
+        status__in=active_statuses,
+        appointment_type=Appointment.AppointmentType.VALORACION,
     ).update(status=Appointment.Status.NO_SHOW)
+    # Procedimientos vencidos → EXPIRED
+    Appointment.objects.filter(
+        ends_at__lt=_now,
+        status__in=active_statuses,
+        appointment_type=Appointment.AppointmentType.TRATAMIENTO,
+    ).update(status=Appointment.Status.EXPIRED)
 
 
 def _appointment_to_dict(a):
@@ -499,6 +601,7 @@ def _appointment_to_dict(a):
         'starts_at': a.starts_at.isoformat(),
         'ends_at': a.ends_at.isoformat(),
         'status': a.status,
+        'appointment_type': a.appointment_type,
         'notes': a.notes or '',
         'patient_id': a.patient_id,
         'patient_name': f"{a.patient.first_name} {a.patient.last_name}".strip() if a.patient else '—',
@@ -520,7 +623,7 @@ def _appointment_to_dict(a):
 
 
 @csrf_exempt
-def admin_appointments(request):
+def admin_appointments(request): 
     user, err = _require_staff(request)
     if err:
         return err
@@ -620,15 +723,42 @@ def admin_appointments(request):
                     'detail': f'Conflicto de horario: el doctor ya tiene una cita ({conflict.patient}) de {conflict.starts_at.strftime("%H:%M")} a {conflict.ends_at.strftime("%H:%M")}.'
                 }, status=409)
 
+        raw_type = (payload.get('appointment_type') or '').upper()
+        appt_type = (
+            Appointment.AppointmentType.VALORACION
+            if raw_type == 'VALORACION'
+            else Appointment.AppointmentType.TRATAMIENTO
+        )
+
         a = Appointment.objects.create(
             patient=patient,
             treatment=treatment,
             doctor=doctor,
             starts_at=starts_at,
             ends_at=ends_at,
+            appointment_type=appt_type,
             status=payload.get('status') or Appointment.Status.SCHEDULED,
             notes=(payload.get('notes') or '').strip(),
         )
+
+        # Create Google Calendar event to block the time slot
+        try:
+            from gcal.service import create_event as _create_gcal_event
+            if appt_type == Appointment.AppointmentType.VALORACION:
+                summary = f"Valoración — {patient.first_name} {patient.last_name}"
+            else:
+                proc_name = treatment.name if treatment else 'Procedimiento'
+                summary = f"{proc_name} — {patient.first_name} {patient.last_name}"
+            description = (payload.get('notes') or '').strip()
+            if doctor:
+                description = f"Responsable: {doctor.first_name} {doctor.last_name}" + (f"\n{description}" if description else '')
+            gcal_id = _create_gcal_event(starts_at, ends_at, summary, description)
+            if gcal_id:
+                a.google_event_id = gcal_id
+                a.save(update_fields=['google_event_id'])
+        except Exception:
+            pass  # GCal not connected — cita se guarda igual
+
         a.refresh_from_db()
         a.patient = patient
         a.treatment = treatment
@@ -686,49 +816,8 @@ def admin_appointment_detail(request, appointment_id):
                 }, status=409)
             a.doctor = doctor
 
-        # SCHEDULED → CONFIRMED: require payment (PAID or PARTIAL) + signed consent
-        if new_status == Appointment.Status.CONFIRMED:
-            try:
-                pay = a.payment
-                if pay.status not in (Payment.Status.PAID, Payment.Status.PARTIAL):
-                    return JsonResponse({'detail': 'Se requiere pago registrado (pagado o parcial) para confirmar.'}, status=400)
-            except Payment.DoesNotExist:
-                return JsonResponse({'detail': 'Se requiere registrar el pago antes de confirmar.'}, status=400)
-            # Check consent
-            has_consent = False
-            try:
-                if a.medical_record and a.medical_record.consents.filter(signed_at__isnull=False).exists():
-                    has_consent = True
-            except Exception:
-                pass
-            if not has_consent:
-                # Also check standalone consents linked to this patient for today
-                from django.utils import timezone as _tz
-                today = _tz.now().date()
-                has_consent = Consent.objects.filter(
-                    patient=a.patient,
-                    signed_at__isnull=False,
-                    created_at__date=today,
-                ).exists()
-            if not has_consent:
-                return JsonResponse({'detail': 'Se requiere consentimiento firmado para confirmar.'}, status=400)
-
-        # CONFIRMED → IN_PROGRESS: require doctor + time window (15 min before → ends_at)
+        # PENDING/SCHEDULED → IN_PROGRESS: auto-create MedicalRecord if missing
         if new_status == Appointment.Status.IN_PROGRESS:
-            if not a.doctor_id:
-                return JsonResponse({'detail': 'Se requiere un médico asignado para iniciar consulta.'}, status=400)
-            now = timezone.now()
-            window_start = a.starts_at - timedelta(minutes=15)
-            window_end = a.ends_at
-            if now < window_start:
-                minutes_left = int((window_start - now).total_seconds() / 60)
-                return JsonResponse({
-                    'detail': f'Aún no es hora de iniciar. Puede iniciar desde 15 min antes de la cita (faltan {minutes_left} min).'
-                }, status=400)
-            if now > window_end:
-                return JsonResponse({
-                    'detail': 'La ventana para iniciar esta cita ya pasó. Marque como No Asistió o cancele.'
-                }, status=400)
             try:
                 a.medical_record
             except Exception:
@@ -737,15 +826,6 @@ def admin_appointment_detail(request, appointment_id):
                     doctor=a.doctor,
                     appointment=a,
                 )
-
-        # IN_PROGRESS → COMPLETED: require MedicalRecord with diagnosis
-        if new_status == Appointment.Status.COMPLETED:
-            try:
-                mr = a.medical_record
-                if not mr.diagnosis.strip():
-                    return JsonResponse({'detail': 'Se requiere diagnóstico en la historia clínica para completar.'}, status=400)
-            except Exception:
-                return JsonResponse({'detail': 'Se requiere historia clínica para completar la cita.'}, status=400)
 
         a.status = new_status
         a.save(update_fields=['status', 'doctor_id', 'updated_at'])

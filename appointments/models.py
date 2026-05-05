@@ -4,12 +4,10 @@ from django.db import models
 class Appointment(models.Model):
     class Status(models.TextChoices):
         PENDING     = 'PENDING',     'Pendiente'
-        SCHEDULED   = 'SCHEDULED',   'Programada'
-        CONFIRMED   = 'CONFIRMED',   'Confirmada'
-        IN_PROGRESS = 'IN_PROGRESS', 'En curso'
         COMPLETED   = 'COMPLETED',   'Completada'
         CANCELED    = 'CANCELED',    'Cancelada'
         NO_SHOW     = 'NO_SHOW',     'No asistió'
+        EXPIRED     = 'EXPIRED',     'Vencida'
 
     class AppointmentType(models.TextChoices):
         VALORACION  = 'VALORACION',  'Valoración'

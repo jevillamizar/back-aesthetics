@@ -1,0 +1,29 @@
+from django.db import migrations, models
+
+
+class Migration(migrations.Migration):
+
+    dependencies = [
+        ('appointments', '0005_auto'),
+    ]
+
+    operations = [
+        migrations.AlterField(
+            model_name='appointment',
+            name='status',
+            field=models.CharField(
+                choices=[
+                    ('PENDING', 'Pendiente'),
+                    ('SCHEDULED', 'Programada'),
+                    ('CONFIRMED', 'Confirmada'),
+                    ('IN_PROGRESS', 'En curso'),
+                    ('COMPLETED', 'Completada'),
+                    ('CANCELED', 'Cancelada'),
+                    ('NO_SHOW', 'No asistió'),
+                    ('EXPIRED', 'Vencida'),
+                ],
+                default='SCHEDULED',
+                max_length=20,
+            ),
+        ),
+    ]

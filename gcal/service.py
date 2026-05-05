@@ -82,16 +82,20 @@ def get_calendar_id() -> str | None:
     return 'primary'
 
 
-def get_free_slots(date: datetime.date) -> list[dict]:
+def get_free_slots(date: datetime.date, duration_minutes: int | None = None) -> list[dict]:
     """
     Returns a list of free slot dicts for the given date:
     [{"starts_at": "2025-05-10T09:00:00+00:00", "ends_at": "2025-05-10T10:00:00+00:00"}, ...]
+
+    duration_minutes: slot size in minutes. Defaults to SLOT_DURATION_MINUTES (60).
     """
     from googleapiclient.discovery import build
 
     creds = get_credentials()
     if creds is None:
         return []
+
+    slot_mins = int(duration_minutes) if duration_minutes and duration_minutes > 0 else SLOT_DURATION_MINUTES
 
     service = build('calendar', 'v3', credentials=creds)
     calendar_id = get_calendar_id()
@@ -116,7 +120,7 @@ def get_free_slots(date: datetime.date) -> list[dict]:
 
     free_slots = []
     slot_start = day_start
-    delta = datetime.timedelta(minutes=SLOT_DURATION_MINUTES)
+    delta = datetime.timedelta(minutes=slot_mins)
 
     while slot_start + delta <= day_end:
         slot_end = slot_start + delta
