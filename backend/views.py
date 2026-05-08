@@ -384,3 +384,32 @@ def public_landing(request):
             ),
         }
     )
+
+
+def public_team(request):
+    if request.method != 'GET':
+        return JsonResponse({'detail': 'Method not allowed'}, status=405)
+
+    from users.models import User
+
+    doctors = User.objects.filter(role=User.Role.DOCTOR, is_active=True).order_by('last_name', 'first_name')
+
+    team = []
+    for doc in doctors:
+        photo_url = ''
+        if getattr(doc, 'photo', None):
+            try:
+                photo_url = request.build_absolute_uri(doc.photo.url)
+            except Exception:
+                photo_url = ''
+        team.append({
+            'id': doc.id,
+            'first_name': doc.first_name or '',
+            'last_name': doc.last_name or '',
+            'profession': doc.profession or '',
+            'specialty': doc.specialty or '',
+            'bio': doc.bio or '',
+            'photo_url': photo_url,
+        })
+
+    return JsonResponse({'team': team})

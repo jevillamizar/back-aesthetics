@@ -66,6 +66,10 @@ class User(AbstractUser):
     rethus_status = models.CharField(max_length=15, choices=RethusStatus.choices, default=RethusStatus.ACTIVE, blank=True)
     certifying_entity = models.CharField(max_length=150, blank=True)
 
+    # Public profile (landing page)
+    bio = models.TextField(blank=True, help_text='Sobre mí — visible en landing page (100-500 chars)')
+    photo = models.ImageField(upload_to='doctors/', blank=True, help_text='Foto de perfil del médico')
+
     # Responsibility
     professional_seal = models.CharField(max_length=255, blank=True)
     notes = models.TextField(blank=True)

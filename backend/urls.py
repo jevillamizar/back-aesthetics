@@ -41,6 +41,7 @@ from .views import (
     public_create_appointment,
     public_create_lead,
     public_landing,
+    public_team,
     public_treatments,
     tenant_debug,
 )
@@ -53,6 +54,7 @@ urlpatterns = [
     path('public/landing/', public_landing),
     path('public/availability/', public_availability),
     path('public/leads/', public_create_lead),
+    path('public/team/', public_team),
     path('api/gcal/connect/', gcal_connect),
     path('api/gcal/oauth2callback/', gcal_oauth2callback),
     path('api/gcal/status/', gcal_status),

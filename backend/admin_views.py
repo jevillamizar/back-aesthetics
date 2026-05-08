@@ -37,19 +37,6 @@ ALLOWED_TRANSITIONS = {
     Appointment.Status.CANCELED:    set(),
     Appointment.Status.NO_SHOW:     set(),
     Appointment.Status.EXPIRED:     set(),
-    # Legacy — por si existen citas antiguas en estos estados
-    Appointment.Status.SCHEDULED:   {
-        Appointment.Status.COMPLETED,
-        Appointment.Status.IN_PROGRESS,
-        Appointment.Status.NO_SHOW,
-        Appointment.Status.CANCELED,
-    },
-    Appointment.Status.CONFIRMED:   {
-        Appointment.Status.COMPLETED,
-        Appointment.Status.IN_PROGRESS,
-        Appointment.Status.NO_SHOW,
-        Appointment.Status.CANCELED,
-    },
 }
 
 
@@ -1197,7 +1184,13 @@ def admin_patient_detail(request, patient_id):
 
 # ─── Doctors (Users with role=DOCTOR) ────────────────────────────────
 
-def _doctor_to_dict(u):
+def _doctor_to_dict(u, request=None):
+    photo_url = ''
+    if getattr(u, 'photo', None):
+        try:
+            photo_url = request.build_absolute_uri(u.photo.url) if request else u.photo.url
+        except Exception:
+            photo_url = ''
     return {
         'id': u.id,
         'first_name': u.first_name or '',
@@ -1217,6 +1210,8 @@ def _doctor_to_dict(u):
         'certifying_entity': u.certifying_entity or '',
         'professional_seal': u.professional_seal or '',
         'notes': u.notes or '',
+        'bio': u.bio or '',
+        'photo_url': photo_url,
     }
 
 
@@ -1237,46 +1232,62 @@ def admin_doctors(request):
                 Q(first_name__icontains=search) | Q(last_name__icontains=search) |
                 Q(email__icontains=search)
             )
-        return JsonResponse({'doctors': [_doctor_to_dict(u) for u in qs]})
+        return JsonResponse({'doctors': [_doctor_to_dict(u, request) for u in qs]})
 
     if request.method == 'POST':
         import secrets, string as _string
-        try:
-            payload = json.loads(request.body.decode('utf-8') or '{}')
-        except json.JSONDecodeError:
-            return JsonResponse({'detail': 'Invalid JSON'}, status=400)
-        email = (payload.get('email') or '').strip()
+        is_multipart = request.content_type and 'multipart' in request.content_type
+        if is_multipart:
+            payload = request.POST
+            get = lambda k, d='': (payload.get(k) or d).strip()
+        else:
+            try:
+                payload = json.loads(request.body.decode('utf-8') or '{}')
+            except json.JSONDecodeError:
+                return JsonResponse({'detail': 'Invalid JSON'}, status=400)
+            get = lambda k, d='': (payload.get(k) or d).strip() if isinstance(payload.get(k, d), str) else payload.get(k, d)
+        email = get('email')
         if not email:
             return JsonResponse({'detail': 'email required'}, status=400)
         if _User.objects.filter(email=email).exists():
             return JsonResponse({'detail': 'Email already in use'}, status=400)
-        password = (payload.get('password') or '').strip()
+        bio_val = get('bio')
+        if bio_val and len(bio_val) < 100:
+            return JsonResponse({'detail': 'La bio debe tener al menos 100 caracteres'}, status=400)
+        if bio_val and len(bio_val) > 500:
+            return JsonResponse({'detail': 'La bio no puede superar los 500 caracteres'}, status=400)
+        password = get('password')
         generated = False
         if not password:
             alphabet = _string.ascii_letters + _string.digits + '!@#$'
             password = ''.join(secrets.choice(alphabet) for _ in range(12))
             generated = True
+        grad_year = payload.get('graduation_year') or None
         doc = _User.objects.create_user(
             email=email,
             password=password,
-            first_name=(payload.get('first_name') or '').strip(),
-            last_name=(payload.get('last_name') or '').strip(),
+            first_name=get('first_name'),
+            last_name=get('last_name'),
             role=_User.Role.DOCTOR,
-            document_type=(payload.get('document_type') or 'CC').strip(),
-            document_number=(payload.get('document_number') or '').strip(),
+            document_type=get('document_type') or 'CC',
+            document_number=get('document_number'),
             date_of_birth=payload.get('date_of_birth') or None,
-            phone=(payload.get('phone') or '').strip(),
-            profession=(payload.get('profession') or '').strip(),
-            specialty=(payload.get('specialty') or '').strip(),
-            university=(payload.get('university') or '').strip(),
-            graduation_year=payload.get('graduation_year') or None,
-            rethus_number=(payload.get('rethus_number') or '').strip(),
-            rethus_status=(payload.get('rethus_status') or 'ACTIVE').strip(),
-            certifying_entity=(payload.get('certifying_entity') or '').strip(),
-            professional_seal=(payload.get('professional_seal') or '').strip(),
-            notes=(payload.get('notes') or '').strip(),
+            phone=get('phone'),
+            profession=get('profession'),
+            specialty=get('specialty'),
+            university=get('university'),
+            graduation_year=grad_year,
+            rethus_number=get('rethus_number'),
+            rethus_status=get('rethus_status') or 'ACTIVE',
+            certifying_entity=get('certifying_entity'),
+            professional_seal=get('professional_seal'),
+            notes=get('notes'),
+            bio=bio_val,
         )
-        resp = {'doctor': _doctor_to_dict(doc)}
+        if is_multipart and request.FILES.get('photo'):
+            doc.photo = request.FILES['photo']
+            doc.save()
+        resp = {'doctor': _doctor_to_dict(doc, request)}
         if generated:
             resp['generated_password'] = password
         return JsonResponse(resp, status=201)
@@ -1297,13 +1308,19 @@ def admin_doctor_detail(request, doctor_id):
         return JsonResponse({'detail': 'Not found'}, status=404)
 
     if request.method == 'GET':
-        return JsonResponse({'doctor': _doctor_to_dict(doc)})
+        return JsonResponse({'doctor': _doctor_to_dict(doc, request)})
 
     if request.method == 'PUT':
-        try:
-            payload = json.loads(request.body.decode('utf-8') or '{}')
-        except json.JSONDecodeError:
-            return JsonResponse({'detail': 'Invalid JSON'}, status=400)
+        is_multipart = request.content_type and 'multipart' in request.content_type
+        if is_multipart:
+            payload = request.POST
+            get_str = lambda k: (payload.get(k) or '').strip()
+        else:
+            try:
+                payload = json.loads(request.body.decode('utf-8') or '{}')
+            except json.JSONDecodeError:
+                return JsonResponse({'detail': 'Invalid JSON'}, status=400)
+            get_str = lambda k: (payload.get(k) or '').strip()
         simple_fields = [
             'first_name', 'last_name', 'document_number', 'phone',
             'profession', 'specialty', 'university', 'rethus_number',
@@ -1311,25 +1328,34 @@ def admin_doctor_detail(request, doctor_id):
         ]
         for f in simple_fields:
             if f in payload:
-                setattr(doc, f, (payload[f] or '').strip())
+                setattr(doc, f, get_str(f))
+        if 'bio' in payload:
+            bio_val = get_str('bio')
+            if bio_val and len(bio_val) < 100:
+                return JsonResponse({'detail': 'La bio debe tener al menos 100 caracteres'}, status=400)
+            if bio_val and len(bio_val) > 500:
+                return JsonResponse({'detail': 'La bio no puede superar los 500 caracteres'}, status=400)
+            doc.bio = bio_val
         if 'document_type' in payload:
-            doc.document_type = (payload['document_type'] or 'CC').strip()
+            doc.document_type = get_str('document_type') or 'CC'
         if 'date_of_birth' in payload:
-            doc.date_of_birth = payload['date_of_birth'] or None
+            doc.date_of_birth = payload.get('date_of_birth') or None
         if 'graduation_year' in payload:
-            doc.graduation_year = payload['graduation_year'] or None
+            doc.graduation_year = payload.get('graduation_year') or None
         if 'email' in payload:
-            new_email = (payload['email'] or '').strip()
+            new_email = get_str('email')
             if new_email and new_email != doc.email:
                 if _User.objects.filter(email=new_email).exists():
                     return JsonResponse({'detail': 'Email already in use'}, status=400)
                 doc.email = new_email
         if 'is_active' in payload:
-            doc.is_active = bool(payload['is_active'])
+            doc.is_active = bool(payload.get('is_active'))
         if payload.get('password'):
-            doc.set_password(payload['password'].strip())
+            doc.set_password(get_str('password'))
+        if is_multipart and request.FILES.get('photo'):
+            doc.photo = request.FILES['photo']
         doc.save()
-        return JsonResponse({'doctor': _doctor_to_dict(doc)})
+        return JsonResponse({'doctor': _doctor_to_dict(doc, request)})
 
     if request.method == 'DELETE':
         doc.delete()
