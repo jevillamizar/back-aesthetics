@@ -532,8 +532,7 @@ def _auto_no_show():
     _now = _tz.now()
     active_statuses = [
         Appointment.Status.PENDING,
-        Appointment.Status.SCHEDULED,
-        Appointment.Status.CONFIRMED,
+        Appointment.Status.IN_PROGRESS,
     ]
     # Valoraciones vencidas → NO_SHOW
     Appointment.objects.filter(
@@ -724,7 +723,7 @@ def admin_appointments(request):
             starts_at=starts_at,
             ends_at=ends_at,
             appointment_type=appt_type,
-            status=payload.get('status') or Appointment.Status.SCHEDULED,
+            status=payload.get('status') or Appointment.Status.PENDING,
             notes=(payload.get('notes') or '').strip(),
         )
 
@@ -825,7 +824,7 @@ def admin_appointment_detail(request, appointment_id):
         except json.JSONDecodeError:
             return JsonResponse({'detail': 'Invalid JSON'}, status=400)
 
-        LOCKED_STATUSES = {Appointment.Status.CONFIRMED, Appointment.Status.COMPLETED}
+        LOCKED_STATUSES = {Appointment.Status.COMPLETED}
         ALLOWED_ON_LOCKED = {'status', 'notes'}
         if a.status in LOCKED_STATUSES and set(payload.keys()) - ALLOWED_ON_LOCKED:
             return JsonResponse(
@@ -1313,9 +1312,16 @@ def admin_doctor_detail(request, doctor_id):
     if request.method == 'PUT':
         is_multipart = request.content_type and 'multipart' in request.content_type
         if is_multipart:
-            payload = request.POST
+            from django.http import QueryDict
+            from django.http.multipartparser import MultiPartParser
+            _post, _files = MultiPartParser(
+                request.META, request, request.upload_handlers, request.encoding
+            ).parse()
+            payload = _post
+            upload_files = _files
             get_str = lambda k: (payload.get(k) or '').strip()
         else:
+            upload_files = {}
             try:
                 payload = json.loads(request.body.decode('utf-8') or '{}')
             except json.JSONDecodeError:
@@ -1352,8 +1358,8 @@ def admin_doctor_detail(request, doctor_id):
             doc.is_active = bool(payload.get('is_active'))
         if payload.get('password'):
             doc.set_password(get_str('password'))
-        if is_multipart and request.FILES.get('photo'):
-            doc.photo = request.FILES['photo']
+        if upload_files.get('photo'):
+            doc.photo = upload_files['photo']
         doc.save()
         return JsonResponse({'doctor': _doctor_to_dict(doc, request)})
 

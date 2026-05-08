@@ -124,7 +124,7 @@ def public_create_appointment(request):
         treatment=treatment,
         starts_at=starts_at,
         ends_at=ends_at,
-        status=Appointment.Status.SCHEDULED,
+        status=Appointment.Status.PENDING,
         notes=(payload.get('notes') or '').strip(),
     )
 
