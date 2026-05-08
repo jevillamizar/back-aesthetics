@@ -1175,7 +1175,13 @@ def admin_patient_detail(request, patient_id):
         return JsonResponse({'patient': _patient_to_dict(p, request)})
 
     if request.method == 'DELETE':
-        p.delete()
+        from django.db import transaction
+        from appointments.models import Appointment as _Appt
+        from medical_records.models import MedicalRecord as _MR
+        with transaction.atomic():
+            _Appt.objects.filter(patient=p).delete()
+            _MR.objects.filter(patient=p).delete()
+            p.delete()
         return JsonResponse({'detail': 'Deleted'}, status=204)
 
     return JsonResponse({'detail': 'Method not allowed'}, status=405)
@@ -1552,8 +1558,10 @@ def admin_revenue(request):
 
 # ─── Medical Records ──────────────────────────────────────────────────
 
-def _medical_record_to_dict(rec):
+def _medical_record_to_dict(rec, request=None):
     items = rec.treatment_items.select_related('treatment').all()
+    def _abs(url):
+        return request.build_absolute_uri(url) if (request and url) else url
     return {
         'id': rec.id,
         'patient_id': rec.patient_id,
@@ -1580,6 +1588,8 @@ def _medical_record_to_dict(rec):
         'informed_consent': rec.informed_consent or '',
         'consent_signed': rec.consent_signed,
         'notes': rec.notes or '',
+        'photo_before_url': _abs(rec.photo_before.url) if rec.photo_before else '',
+        'photo_after_url':  _abs(rec.photo_after.url)  if rec.photo_after  else '',
         'created_at': rec.created_at.isoformat(),
         'treatment_items': [
             {
@@ -1622,7 +1632,7 @@ def admin_medical_records(request):
                 Q(chief_complaint__icontains=search) |
                 Q(diagnosis__icontains=search)
             )
-        return JsonResponse({'records': [_medical_record_to_dict(r) for r in qs]})
+        return JsonResponse({'records': [_medical_record_to_dict(r, request) for r in qs]})
 
     if request.method == 'POST':
         try:
@@ -1691,7 +1701,7 @@ def admin_medical_records(request):
 
         rec.refresh_from_db()
         rec = MedicalRecord.objects.select_related('patient', 'doctor', 'appointment').prefetch_related('treatment_items__treatment').get(id=rec.id)
-        return JsonResponse({'record': _medical_record_to_dict(rec)}, status=201)
+        return JsonResponse({'record': _medical_record_to_dict(rec, request)}, status=201)
 
     return JsonResponse({'detail': 'Method not allowed'}, status=405)
 
@@ -1710,9 +1720,23 @@ def admin_medical_record_detail(request, record_id):
         return JsonResponse({'detail': 'Not found'}, status=404)
 
     if request.method == 'GET':
-        return JsonResponse({'record': _medical_record_to_dict(rec)})
+        return JsonResponse({'record': _medical_record_to_dict(rec, request)})
 
     if request.method == 'PUT':
+        is_multipart = request.content_type and 'multipart' in request.content_type
+        if is_multipart:
+            from django.http.multipartparser import MultiPartParser
+            _post, _files = MultiPartParser(
+                request.META, request, request.upload_handlers, request.encoding
+            ).parse()
+            if _files.get('photo_before'):
+                rec.photo_before = _files['photo_before']
+            if _files.get('photo_after'):
+                rec.photo_after = _files['photo_after']
+            rec.save(update_fields=['photo_before', 'photo_after', 'updated_at'])
+            rec = MedicalRecord.objects.select_related('patient', 'doctor', 'appointment').prefetch_related('treatment_items__treatment').get(id=record_id)
+            return JsonResponse({'record': _medical_record_to_dict(rec, request)})
+
         try:
             payload = json.loads(request.body.decode('utf-8') or '{}')
         except json.JSONDecodeError:
@@ -1767,7 +1791,7 @@ def admin_medical_record_detail(request, record_id):
                 )
 
         rec = MedicalRecord.objects.select_related('patient', 'doctor', 'appointment').prefetch_related('treatment_items__treatment').get(id=record_id)
-        return JsonResponse({'record': _medical_record_to_dict(rec)})
+        return JsonResponse({'record': _medical_record_to_dict(rec, request)})
 
     if request.method == 'DELETE':
         rec.delete()

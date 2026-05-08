@@ -40,6 +40,9 @@ class MedicalRecord(models.Model):
 
     notes = models.TextField(blank=True)
 
+    photo_before = models.ImageField(upload_to='medical_records/', blank=True, null=True)
+    photo_after  = models.ImageField(upload_to='medical_records/', blank=True, null=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
