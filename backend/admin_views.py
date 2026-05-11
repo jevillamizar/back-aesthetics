@@ -1,9 +1,11 @@
 import json
 from datetime import date, datetime, timedelta
+from decimal import Decimal
 
 from django.db.models import Q
 from django.http import JsonResponse
 from django.utils import timezone
+from django.utils.text import slugify
 from django.views.decorators.csrf import csrf_exempt
 
 from appointments.models import Appointment, Payment
@@ -324,20 +326,41 @@ def admin_treatments(request):
         try:
             payload = json.loads(request.body.decode('utf-8') or '{}')
         except json.JSONDecodeError:
-            return JsonResponse({'detail': 'Invalid JSON'}, status=400)
+            return JsonResponse({'detail': 'JSON inválido'}, status=400)
 
+        # Validaciones de campos obligatorios
         name = (payload.get('name') or '').strip()
         if not name:
-            return JsonResponse({'detail': 'name is required'}, status=400)
+            return JsonResponse({'detail': 'El nombre del procedimiento es obligatorio'}, status=400)
+
+        category = (payload.get('category') or '').strip()
+        if not category:
+            return JsonResponse({'detail': 'La categoría es obligatoria'}, status=400)
+
+        raw_price = payload.get('price')
+        if raw_price is None or raw_price == '':
+            return JsonResponse({'detail': 'El precio es obligatorio'}, status=400)
+        try:
+            price = Decimal(str(raw_price))
+        except Exception:
+            return JsonResponse({'detail': 'El precio debe ser un número válido'}, status=400)
+
+        # Generar slug automáticamente desde el nombre si no se proporciona
+        slug_input = payload.get('slug', '').strip()
+        slug = slug_input if slug_input else slugify(name)
+
+        # Validar unicidad del slug
+        if slug and Treatment.objects.filter(slug=slug).exists():
+            return JsonResponse({'detail': 'Ya existe un tratamiento con este slug. Intenta con otro nombre.'}, status=400)
 
         t = Treatment.objects.create(
             name=name,
-            slug=payload.get('slug', '').strip() or None,
-            category=payload.get('category', '').strip(),
+            slug=slug or None,
+            category=category,
             description=payload.get('description', '').strip(),
             long_description=payload.get('long_description', '').strip(),
             duration_minutes=payload.get('duration_minutes') or 30,
-            price=payload.get('price'),
+            price=price,
             is_active=payload.get('is_active', True),
             image_url=payload.get('image_url', '').strip(),
         )
