@@ -47,7 +47,7 @@ from .views import (
 )
 
 urlpatterns = [
-    path('admin/', admin.site.urls),
+    path('django-admin/', admin.site.urls),
     path('tenant/', tenant_debug),
     path('public/appointments/', public_create_appointment),
     path('public/treatments/', public_treatments),
