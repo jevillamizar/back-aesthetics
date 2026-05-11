@@ -13,7 +13,7 @@ class Clinic(TenantMixin):
     business_name = models.CharField(max_length=255, blank=True, verbose_name='Razón social')
     tax_id = models.CharField(max_length=50, blank=True, verbose_name='NIT')
     company_type = models.CharField(max_length=100, blank=True, verbose_name='Tipo de empresa')
-    logo_url = models.URLField(max_length=500, blank=True, verbose_name='Logo URL')
+    logo = models.ImageField(upload_to='clinic_logos/', blank=True, verbose_name='Logo')
     short_description = models.TextField(blank=True, verbose_name='Descripción corta')
 
     # Contacto

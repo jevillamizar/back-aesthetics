@@ -324,13 +324,7 @@ def public_landing(request):
     if landing is not None and not landing.is_published:
         return JsonResponse({'detail': 'Landing not published'}, status=404)
 
-    logo_url = ''
     hero_image_url = ''
-    if landing is not None and getattr(landing, 'logo', None):
-        try:
-            logo_url = request.build_absolute_uri(landing.logo.url)
-        except Exception:
-            logo_url = ''
     if landing is not None and getattr(landing, 'hero_image', None):
         try:
             hero_image_url = request.build_absolute_uri(landing.hero_image.url)
@@ -344,8 +338,29 @@ def public_landing(request):
         except Exception:
             about_image_url = ''
 
+    # Get clinic info for top-bar branding
+    clinic = getattr(request, 'clinic', None)
+
+    # Build clinic logo URL from ImageField
+    clinic_logo_url = ''
+    if clinic and getattr(clinic, 'logo', None):
+        try:
+            clinic_logo_url = request.build_absolute_uri(clinic.logo.url)
+        except Exception:
+            clinic_logo_url = ''
+
     return JsonResponse(
         {
+            'clinic': (
+                None
+                if clinic is None
+                else {
+                    'id': clinic.id,
+                    'name': clinic.name,
+                    'slug': clinic.slug,
+                    'logo_url': clinic_logo_url,
+                }
+            ),
             'landing': (
                 None
                 if landing is None
@@ -360,7 +375,8 @@ def public_landing(request):
                     'font_heading': landing.font_heading,
                     'font_body': landing.font_body,
                     'font_accent': landing.font_accent,
-                    'logo_url': logo_url,
+                    'show_name': landing.show_name,
+                    'show_logo': landing.show_logo,
                     'hero_image_url': hero_image_url,
                     'hero_image_urls': landing.hero_image_urls or [],
                     'trust_indicators': landing.trust_indicators or [],

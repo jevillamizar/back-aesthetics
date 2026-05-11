@@ -13,7 +13,11 @@ class ClinicLanding(models.Model):
     font_heading = models.CharField(max_length=100, blank=True, help_text='Google Font name for titles, e.g. "Playfair Display"')
     font_body = models.CharField(max_length=100, blank=True, help_text='Google Font name for body text, e.g. "Inter"')
     font_accent = models.CharField(max_length=100, blank=True, help_text='Google Font name for decorative text, e.g. "Cormorant Garamond"')
-    logo = models.ImageField(upload_to='landing/', blank=True)
+
+    # Logo display options (logo image is now in Clinic model)
+    show_name = models.BooleanField(default=True, help_text='Mostrar el nombre de la clínica en la landing')
+    show_logo = models.BooleanField(default=True, help_text='Mostrar el logo de la clínica en la landing')
+
     hero_image = models.ImageField(upload_to='landing/', blank=True)
     hero_image_urls = models.JSONField(
         default=list,

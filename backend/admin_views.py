@@ -138,45 +138,71 @@ def admin_clinic(request):
     LANDING_FIELDS = ['phone', 'email', 'address',
                       'instagram_url', 'facebook_url']
 
-    # Fields from Clinic model (business info)
-    CLINIC_FIELDS = ['name', 'business_name', 'tax_id', 'company_type',
-                     'logo_url', 'short_description', 'whatsapp', 'city', 'country']
+    # Fields from Clinic model (business info) - logo handled separately
+    CLINIC_TEXT_FIELDS = ['name', 'business_name', 'tax_id', 'company_type',
+                          'short_description', 'whatsapp', 'city', 'country']
 
     from clinics.models import Clinic as _Clinic
 
     if request.method == 'GET':
         clinic = _Clinic.objects.first()
+        logo_url = ''
+        if clinic and clinic.logo:
+            try:
+                logo_url = request.build_absolute_uri(clinic.logo.url)
+            except Exception:
+                logo_url = ''
         return JsonResponse({'clinic': {
             # Clinic model fields
-            **{f: getattr(clinic, f, '') or '' for f in CLINIC_FIELDS if clinic},
+            'logo_url': logo_url,
+            **{f: getattr(clinic, f, '') or '' for f in CLINIC_TEXT_FIELDS if clinic},
             # Landing model fields
             **{f: getattr(landing, f, '') or '' for f in LANDING_FIELDS},
         }})
 
-    if request.method == 'PUT':
-        try:
-            payload = json.loads(request.body.decode('utf-8') or '{}')
-        except json.JSONDecodeError:
-            return JsonResponse({'detail': 'Invalid JSON'}, status=400)
+    if request.method in ('PUT', 'POST'):
+        # Handle both JSON and multipart/form-data
+        if request.content_type and 'multipart/form-data' in request.content_type:
+            # Multipart form data
+            data = request.POST
+            logo_file = request.FILES.get('logo')
+        else:
+            # JSON data
+            try:
+                data = json.loads(request.body.decode('utf-8') or '{}')
+            except json.JSONDecodeError:
+                return JsonResponse({'detail': 'Invalid JSON'}, status=400)
+            logo_file = None
 
         # Update Clinic model fields
         clinic = _Clinic.objects.first()
         if clinic:
-            for f in CLINIC_FIELDS:
-                if f in payload:
-                    setattr(clinic, f, (payload[f] or '').strip())
+            for f in CLINIC_TEXT_FIELDS:
+                if f in data:
+                    setattr(clinic, f, (data[f] or '').strip())
+            # Handle logo upload
+            if logo_file:
+                clinic.logo = logo_file
             clinic.save()
 
         # Update ClinicLanding model fields
         for f in LANDING_FIELDS:
-            if f in payload:
-                setattr(landing, f, (payload[f] or '').strip())
+            if f in data:
+                setattr(landing, f, (data[f] or '').strip())
         landing.save()
 
+        # Return updated clinic with logo URL
         clinic = _Clinic.objects.first()
+        logo_url = ''
+        if clinic and clinic.logo:
+            try:
+                logo_url = request.build_absolute_uri(clinic.logo.url)
+            except Exception:
+                logo_url = ''
         return JsonResponse({'clinic': {
             # Clinic model fields
-            **{f: getattr(clinic, f, '') or '' for f in CLINIC_FIELDS if clinic},
+            'logo_url': logo_url,
+            **{f: getattr(clinic, f, '') or '' for f in CLINIC_TEXT_FIELDS if clinic},
             # Landing model fields
             **{f: getattr(landing, f, '') or '' for f in LANDING_FIELDS},
         }})
@@ -224,9 +250,9 @@ LANDING_JSON_FIELDS = [
     'hero_image_urls', 'about_image_urls',
 ]
 
-LANDING_BOOL_FIELDS = ['is_published']
+LANDING_BOOL_FIELDS = ['is_published', 'show_name', 'show_logo']
 
-LANDING_IMAGE_FIELDS = ['logo', 'hero_image', 'about_image']
+LANDING_IMAGE_FIELDS = ['hero_image', 'about_image']
 
 
 def _landing_to_dict(landing, request):
