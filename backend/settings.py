@@ -170,8 +170,21 @@ STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 
-MEDIA_URL = '/media/'
-MEDIA_ROOT = BASE_DIR / 'media'
+GCS_BUCKET_NAME = os.environ.get('GCS_BUCKET_NAME', '')
+
+if GCS_BUCKET_NAME:
+    STORAGES = {
+        'default': {'BACKEND': 'storages.backends.gcloud.GoogleCloudStorage'},
+        'staticfiles': {'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage'},
+    }
+    GS_BUCKET_NAME = GCS_BUCKET_NAME
+    GS_DEFAULT_ACL = None
+    MEDIA_URL = f'https://storage.googleapis.com/{GCS_BUCKET_NAME}/'
+else:
+    MEDIA_URL = '/media/'
+    MEDIA_ROOT = BASE_DIR / 'media'
+
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10 MB
 FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10 MB
