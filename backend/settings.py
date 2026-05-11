@@ -179,6 +179,7 @@ if GCS_BUCKET_NAME:
     }
     GS_BUCKET_NAME = GCS_BUCKET_NAME
     GS_DEFAULT_ACL = None
+    GS_QUERYSTRING_AUTH = False
     MEDIA_URL = f'https://storage.googleapis.com/{GCS_BUCKET_NAME}/'
 else:
     MEDIA_URL = '/media/'
@@ -188,3 +189,19 @@ SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10 MB
 FILE_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10 MB
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {
+        'console': {'class': 'logging.StreamHandler'},
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': 'WARNING',
+    },
+    'loggers': {
+        'django': {'handlers': ['console'], 'level': 'WARNING', 'propagate': False},
+        'django.request': {'handlers': ['console'], 'level': 'ERROR', 'propagate': False},
+    },
+}
