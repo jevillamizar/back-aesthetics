@@ -127,22 +127,30 @@ def admin_profile(request):
 
 @csrf_exempt
 def admin_clinic(request):
-    """GET/PUT /api/clinic/ — contact & identity fields from ClinicLanding."""
+    """GET/PUT /api/clinic/ — clinic and landing data."""
     user, err = _require_admin(request)
     if err:
         return err
 
     landing, _ = ClinicLanding.objects.get_or_create(defaults={})
 
-    CLINIC_FIELDS = ['phone', 'email', 'whatsapp_phone', 'address',
-                     'instagram_url', 'facebook_url', 'booking_url']
+    # Fields from ClinicLanding model (contact & social)
+    LANDING_FIELDS = ['phone', 'email', 'address',
+                      'instagram_url', 'facebook_url']
+
+    # Fields from Clinic model (business info)
+    CLINIC_FIELDS = ['name', 'business_name', 'tax_id', 'company_type',
+                     'logo_url', 'short_description', 'whatsapp', 'city', 'country']
+
+    from clinics.models import Clinic as _Clinic
 
     if request.method == 'GET':
-        from clinics.models import Clinic as _Clinic
         clinic = _Clinic.objects.first()
         return JsonResponse({'clinic': {
-            'name': clinic.name if clinic else '',
-            **{f: getattr(landing, f, '') or '' for f in CLINIC_FIELDS},
+            # Clinic model fields
+            **{f: getattr(clinic, f, '') or '' for f in CLINIC_FIELDS if clinic},
+            # Landing model fields
+            **{f: getattr(landing, f, '') or '' for f in LANDING_FIELDS},
         }})
 
     if request.method == 'PUT':
@@ -151,24 +159,26 @@ def admin_clinic(request):
         except json.JSONDecodeError:
             return JsonResponse({'detail': 'Invalid JSON'}, status=400)
 
-        # Update clinic name on the tenant model
-        if 'name' in payload:
-            from clinics.models import Clinic as _Clinic
-            clinic = _Clinic.objects.first()
-            if clinic:
-                clinic.name = (payload['name'] or '').strip()
-                clinic.save(update_fields=['name'])
+        # Update Clinic model fields
+        clinic = _Clinic.objects.first()
+        if clinic:
+            for f in CLINIC_FIELDS:
+                if f in payload:
+                    setattr(clinic, f, (payload[f] or '').strip())
+            clinic.save()
 
-        for f in CLINIC_FIELDS:
+        # Update ClinicLanding model fields
+        for f in LANDING_FIELDS:
             if f in payload:
                 setattr(landing, f, (payload[f] or '').strip())
         landing.save()
 
-        from clinics.models import Clinic as _Clinic
         clinic = _Clinic.objects.first()
         return JsonResponse({'clinic': {
-            'name': clinic.name if clinic else '',
-            **{f: getattr(landing, f, '') or '' for f in CLINIC_FIELDS},
+            # Clinic model fields
+            **{f: getattr(clinic, f, '') or '' for f in CLINIC_FIELDS if clinic},
+            # Landing model fields
+            **{f: getattr(landing, f, '') or '' for f in LANDING_FIELDS},
         }})
 
     return JsonResponse({'detail': 'Method not allowed'}, status=405)
@@ -335,11 +345,11 @@ def admin_treatments(request):
 
         category = (payload.get('category') or '').strip()
         if not category:
-            return JsonResponse({'detail': 'La categoría es obligatoria'}, status=400)
+            return JsonResponse({'detail': 'Debe seleccionar una categoría.'}, status=400)
 
         raw_price = payload.get('price')
         if raw_price is None or raw_price == '':
-            return JsonResponse({'detail': 'El precio es obligatorio'}, status=400)
+            return JsonResponse({'detail': 'El procedimiento debe tener precio.'}, status=400)
         try:
             price = Decimal(str(raw_price))
         except Exception:
