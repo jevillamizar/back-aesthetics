@@ -1161,8 +1161,11 @@ def admin_patient_detail(request, patient_id):
     if request.method == 'PUT':
         content_type = (request.content_type or '').lower()
         if 'multipart' in content_type:
-            payload = request.POST.dict()
-            files = request.FILES
+            from django.http.multipartparser import MultiPartParser
+            _post, files = MultiPartParser(
+                request.META, request, request.upload_handlers, request.encoding
+            ).parse()
+            payload = _post.dict()
         else:
             try:
                 payload = json.loads(request.body.decode('utf-8') or '{}')
