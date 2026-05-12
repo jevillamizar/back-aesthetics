@@ -144,68 +144,56 @@ def admin_clinic(request):
 
     from clinics.models import Clinic as _Clinic
 
-    if request.method == 'GET':
-        clinic = _Clinic.objects.first()
-        logo_url = ''
-        if clinic and clinic.logo:
+    def _clinic_logo_url(clinic):
+        if clinic and getattr(clinic, 'logo', None):
             try:
-                logo_url = request.build_absolute_uri(clinic.logo.url)
+                return request.build_absolute_uri(clinic.logo.url)
             except Exception:
-                logo_url = ''
+                pass
+        return ''
+
+    def _clinic_response(clinic):
         return JsonResponse({'clinic': {
-            # Clinic model fields
-            'logo_url': logo_url,
+            'logo_url': _clinic_logo_url(clinic),
             **{f: getattr(clinic, f, '') or '' for f in CLINIC_TEXT_FIELDS if clinic},
-            # Landing model fields
             **{f: getattr(landing, f, '') or '' for f in LANDING_FIELDS},
         }})
 
+    clinic = getattr(request, 'tenant', None) or _Clinic.objects.first()
+
+    if request.method == 'GET':
+        return _clinic_response(clinic)
+
     if request.method in ('PUT', 'POST'):
-        # Handle both JSON and multipart/form-data
-        if request.content_type and 'multipart/form-data' in request.content_type:
-            # Multipart form data
-            data = request.POST
-            logo_file = request.FILES.get('logo')
+        if request.content_type and 'multipart' in request.content_type.lower():
+            from django.http.multipartparser import MultiPartParser
+            _post, _files = MultiPartParser(
+                request.META, request, request.upload_handlers, request.encoding
+            ).parse()
+            data = _post
+            logo_file = _files.get('logo')
         else:
-            # JSON data
             try:
                 data = json.loads(request.body.decode('utf-8') or '{}')
             except json.JSONDecodeError:
                 return JsonResponse({'detail': 'Invalid JSON'}, status=400)
             logo_file = None
 
-        # Update Clinic model fields
-        clinic = _Clinic.objects.first()
         if clinic:
             for f in CLINIC_TEXT_FIELDS:
                 if f in data:
                     setattr(clinic, f, (data[f] or '').strip())
-            # Handle logo upload
             if logo_file:
                 clinic.logo = logo_file
             clinic.save()
 
-        # Update ClinicLanding model fields
         for f in LANDING_FIELDS:
             if f in data:
                 setattr(landing, f, (data[f] or '').strip())
         landing.save()
 
-        # Return updated clinic with logo URL
-        clinic = _Clinic.objects.first()
-        logo_url = ''
-        if clinic and clinic.logo:
-            try:
-                logo_url = request.build_absolute_uri(clinic.logo.url)
-            except Exception:
-                logo_url = ''
-        return JsonResponse({'clinic': {
-            # Clinic model fields
-            'logo_url': logo_url,
-            **{f: getattr(clinic, f, '') or '' for f in CLINIC_TEXT_FIELDS if clinic},
-            # Landing model fields
-            **{f: getattr(landing, f, '') or '' for f in LANDING_FIELDS},
-        }})
+        clinic = getattr(request, 'tenant', None) or _Clinic.objects.first()
+        return _clinic_response(clinic)
 
     return JsonResponse({'detail': 'Method not allowed'}, status=405)
 
@@ -291,8 +279,11 @@ def admin_landing(request):
         content_type = (request.content_type or '').lower()
 
         if 'multipart' in content_type:
-            payload = request.POST.dict()
-            files = request.FILES
+            from django.http.multipartparser import MultiPartParser
+            _post, files = MultiPartParser(
+                request.META, request, request.upload_handlers, request.encoding
+            ).parse()
+            payload = _post.dict()
         else:
             try:
                 payload = json.loads(request.body.decode('utf-8') or '{}')
