@@ -2,6 +2,7 @@ import json
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 
+from django.db import transaction
 from django.db.models import Q
 from django.http import JsonResponse
 from django.utils import timezone
@@ -271,6 +272,468 @@ LANDING_BOOL_FIELDS = ['is_published', 'show_name', 'show_logo']
 
 LANDING_IMAGE_FIELDS = ['hero_image', 'about_image']
 
+# Campos URL que requieren validación de protocolos seguros
+LANDING_URL_FIELDS = ['booking_url', 'instagram_url', 'facebook_url']
+
+# Campos de color que requieren validación estricta
+LANDING_COLOR_FIELDS = ['primary_color', 'secondary_color', 'accent_color', 'background_color', 'text_color']
+
+# Campos de fuente que requieren validación contra Google Fonts
+LANDING_FONT_FIELDS = ['font_heading', 'font_body', 'font_accent']
+
+# Campos de contacto que requieren validación de formato
+LANDING_CONTACT_FIELDS = ['phone', 'whatsapp_phone']
+
+# Patrón regex para validar teléfonos (acepta +, espacios, guiones, paréntesis)
+_PHONE_REGEX = r'^[\d\s\-\+\(\)]{7,20}$'
+
+# Lista blanca de Google Fonts populares (subset de fuentes seguras)
+# Fuente: https://fonts.google.com/
+_GOOGLE_FONTS_WHITELIST = {
+    # Serif fonts
+    'playfair display', 'cormorant garamond', 'cormorant', 'eb garamond',
+    'libre baskerville', 'merriweather', 'lora', 'crimson text',
+    'source serif pro', 'pt serif', 'noto serif', 'roboto slab',
+    'cardo', 'literata', 'newsreader', 'sorts mill goudy',
+    
+    # Sans-serif fonts
+    'inter', 'roboto', 'open sans', 'lato', 'montserrat', 'poppins',
+    'raleway', 'nunito', 'nunito sans', 'work sans', 'source sans pro',
+    'pt sans', 'noto sans', 'fira sans', 'ibm plex sans', 'rubik',
+    'barlow', 'manrope', 'space grotesk', 'sora', 'outfit',
+    
+    # Display/Decorative fonts
+    'bebas neue', 'oswald', 'space mono', ' DM Sans', 'jetbrains mono',
+    'fira code', 'inconsolata', 'cousine', 'anonymous pro',
+    
+    # Handwriting fonts
+    'dancing script', 'great vibes', 'sacramento', 'parisienne',
+    'allura', 'alex brush', 'pinyon script', 'tangerine',
+}
+
+# Protocolos permitidos para URLs de redes sociales
+_ALLOWED_URL_SCHEMES = {'http', 'https'}
+_BLOCKED_URL_SCHEMES = {'javascript', 'data', 'vbscript', 'file', 'about', 'blob', 'ftp', 'ftps'}
+
+
+# Schemas de validación para campos JSON
+# Cada schema define: tipo requerido, campos obligatorios, validación adicional
+LANDING_JSON_SCHEMAS = {
+    'trust_indicators': {
+        'type': list,
+        'max_items': 6,  # Límite máximo de 6 indicators
+        'item_schema': {
+            'type': dict,
+            'required': ['icon', 'label', 'sub'],
+            'fields': {
+                'icon': {'type': str},
+                'label': {'type': str},
+                'sub': {'type': str},
+            }
+        }
+    },
+    'testimonials': {
+        'type': list,
+        'item_schema': {
+            'type': dict,
+            'required': ['name', 'treatment', 'rating', 'quote'],
+            'fields': {
+                'name': {'type': str},
+                'treatment': {'type': str},
+                'rating': {'type': int, 'min': 1, 'max': 5},
+                'quote': {'type': str},
+                'avatar_url': {'type': str, 'optional': True},  # Opcional
+            }
+        }
+    },
+    'about_bullets': {
+        'type': list,
+        'item_schema': {
+            'type': (str, dict),  # Puede ser string simple o objeto
+            'object_schema': {
+                'required': ['title'],
+                'fields': {
+                    'title': {'type': str},
+                    'description': {'type': str, 'optional': True},
+                    'image_url': {'type': str, 'optional': True},
+                }
+            }
+        }
+    },
+    'hero_image_urls': {
+        'type': list,
+        'item_schema': {
+            'type': str,
+            'url_validation': True,
+        },
+        'no_duplicates': True,  # Rechazar URLs duplicadas
+    },
+    'about_image_urls': {
+        'type': list,
+        'item_schema': {
+            'type': str,
+            'url_validation': True,
+        },
+        'no_duplicates': True,  # Rechazar URLs duplicadas
+    },
+}
+
+
+def _validate_url_safe(url):
+    """Validar que URL es segura (HTTP/HTTPS, no javascript:, data:, etc)."""
+    if not isinstance(url, str):
+        return False
+    url_lower = url.lower().strip()
+    # Rechazar protocolos peligrosos
+    dangerous_protocols = ('javascript:', 'data:', 'vbscript:', 'file:', 'about:')
+    if url_lower.startswith(dangerous_protocols):
+        return False
+    # Debe tener esquema HTTP o HTTPS o ser path relativo
+    if url_lower.startswith(('http://', 'https://', '/', './')):
+        return True
+    # Si no tiene esquema, verificar que no parezca peligrosa
+    if ':' in url_lower.split('?')[0].split('#')[0]:
+        # Tiene esquema desconocido
+        return False
+    return True
+
+
+def _validate_safe_url(url):
+    """
+    Validar que una URL de campo social es segura.
+    
+    Retorna (is_valid: bool, error_message: str)
+    """
+    if not isinstance(url, str):
+        return False, 'La URL debe ser una cadena de texto'
+    
+    url_stripped = url.strip()
+    
+    if not url_stripped:
+        return True, None  # URL vacía es válida (campo opcional)
+    
+    url_lower = url_stripped.lower()
+    
+    # Verificar protocolos bloqueados explícitamente
+    for scheme in _BLOCKED_URL_SCHEMES:
+        if url_lower.startswith(f'{scheme}:'):
+            return False, f'Protocolo "{scheme}:" no permitido por seguridad'
+    
+    # Si tiene ://, verificar que sea protocolo permitido
+    if '://' in url_stripped:
+        scheme = url_stripped.split('://')[0].lower()
+        if scheme not in _ALLOWED_URL_SCHEMES:
+            return False, f'Protocolo "{scheme}:" no permitido. Use http:// o https://'
+    
+    # Si no tiene esquema, asumir https (campo opcional puede dejarse vacío)
+    # No validamos más para permitir URLs relativas o sin esquema
+    
+    return True, None
+
+
+def _validate_phone(phone_value):
+    """
+    Validar formato de número telefónico.
+    
+    Retorna (is_valid: bool, error_message: str)
+    """
+    if not isinstance(phone_value, str):
+        return False, 'El teléfono debe ser una cadena de texto'
+    
+    phone_stripped = phone_value.strip()
+    
+    if not phone_stripped:
+        return True, None  # Vacío es válido (campo opcional)
+    
+    # Verificar caracteres permitidos: dígitos, espacios, +, -, (, )
+    import re
+    if not re.match(_PHONE_REGEX, phone_stripped):
+        return False, 'Formato de teléfono inválido. Use solo números, espacios, +, -, ()'
+    
+    # Debe contener al menos algunos dígitos
+    digits = re.sub(r'\D', '', phone_stripped)
+    if len(digits) < 7:
+        return False, 'El teléfono debe tener al menos 7 dígitos'
+    
+    return True, None
+
+
+def _create_audit_logs(landing, user, old_values, payload):
+    """
+    Crear registros de auditoría para campos que cambiaron.
+    
+    Args:
+        landing: Instancia de ClinicLanding modificada
+        user: Usuario que realizó el cambio
+        old_values: Dict con valores antiguos {field_name: old_value}
+        payload: Dict con nuevos valores del request
+    """
+    from landing.models import LandingAuditLog
+    
+    for field_name, old_value in old_values.items():
+        if field_name not in payload:
+            continue
+            
+        new_value = payload[field_name]
+        
+        # Normalizar valores para comparación
+        # Convertir a string para comparación consistente
+        old_str = '' if old_value is None else str(old_value)
+        new_str = '' if new_value is None else str(new_value)
+        
+        # Para campos JSON, serializar a JSON string
+        if field_name in LANDING_JSON_FIELDS:
+            import json
+            old_str = json.dumps(old_value) if old_value is not None else '[]'
+            if isinstance(new_value, (list, dict)):
+                new_str = json.dumps(new_value)
+        
+        # Para booleanos, normalizar
+        if field_name in LANDING_BOOL_FIELDS:
+            old_str = str(bool(old_value)).lower()
+            if isinstance(new_value, str):
+                new_str = str(new_value.lower() in ('true', '1', 'yes')).lower()
+            else:
+                new_str = str(bool(new_value)).lower()
+        
+        # Solo crear log si hubo cambio real
+        if old_str != new_str:
+            LandingAuditLog.objects.create(
+                landing=landing,
+                changed_by=user,
+                field_name=field_name,
+                old_value=old_str[:500],  # Limitar tamaño
+                new_value=new_str[:500]
+            )
+
+
+# Patrones regex para validación de colores CSS
+_COLOR_PATTERNS = {
+    'hex': r'^#([A-Fa-f0-9]{3,4}|[A-Fa-f0-9]{6}|[A-Fa-f0-9]{8})$',
+    'rgb': r'^rgb\(\d{1,3},\s*\d{1,3},\s*\d{1,3}\)$',
+    'rgba': r'^rgba\(\d{1,3},\s*\d{1,3},\s*\d{1,3},\s*(0|1|0?\.\d+)\)$',
+    'hsl': r'^hsl\(\d{1,3},\s*\d{1,3}%?,\s*\d{1,3}%?\)$',
+    'hsla': r'^hsla\(\d{1,3},\s*\d{1,3}%?,\s*\d{1,3}%?,\s*(0|1|0?\.\d+)\)$',
+}
+
+# Lista de nombres de colores CSS estándar (subset más comunes)
+_CSS_COLOR_NAMES = {
+    'transparent', 'inherit', 'initial', 'unset',
+    'black', 'white', 'red', 'green', 'blue', 'yellow', 'cyan', 'magenta',
+    'gray', 'grey', 'silver', 'maroon', 'olive', 'lime', 'aqua', 'teal',
+    'navy', 'fuchsia', 'purple', 'orange', 'pink', 'brown', 'gold', 'ivory',
+    'beige', 'wheat', 'tan', 'khaki', 'plum', 'violet', 'indigo', 'coral',
+    'salmon', 'crimson', 'firebrick', 'tomato', 'orangered', 'gold',
+    'khaki', 'lavender', 'thistle', 'orchid', 'mediumorchid', 'mediumpurple',
+    'rebeccapurple', 'slateblue', 'darkslateblue', 'mediumslateblue',
+    'lightgreen', 'limegreen', 'forestgreen', 'darkgreen', 'seagreen',
+    'mediumseagreen', 'springgreen', 'lightseagreen', 'darkseagreen',
+    'palegreen', 'lightcyan', 'darkcyan', 'cadetblue', 'steelblue',
+    'lightsteelblue', 'deepskyblue', 'dodgerblue', 'cornflowerblue',
+    'royalblue', 'midnightblue', 'slategray', 'lightslategray', 'dimgray',
+    'darkgray', 'lightgray', 'gainsboro', 'whitesmoke', 'ghostwhite',
+    'aliceblue', 'honeydew', 'mintcream', 'azure', 'snow', 'floralwhite',
+    'seashell', 'oldlace', 'antiquewhite', 'blanchedalmond', 'bisque',
+    'peachpuff', 'moccasin', 'papayawhip', 'lemonchiffon', 'lightyellow',
+    'lightgoldenrodyellow', 'cornsilk', 'linen', 'mistyrose', 'lavenderblush',
+}
+
+# Caracteres peligrosos que indican inyección CSS
+# NOTA: Los paréntesis () se permiten porque son necesarios para rgb(), rgba(), hsl(), hsla()
+_DANGEROUS_COLOR_CHARS = {';', '{', '}', '<', '>', '"', "'", '\\', '`', '='}
+
+
+def _validate_safe_color(color_value):
+    """
+    Validar que un valor de color CSS es seguro y no contiene inyección.
+    
+    Retorna (is_valid: bool, error_message: str)
+    """
+    if not isinstance(color_value, str):
+        return False, 'El color debe ser una cadena de texto'
+    
+    color_stripped = color_value.strip()
+    
+    if not color_stripped:
+        return True, None  # Vacío es válido (campo opcional)
+    
+    # Verificar caracteres peligrosos que indican inyección
+    for char in _DANGEROUS_COLOR_CHARS:
+        if char in color_stripped:
+            return False, f'Carácter "{char}" no permitido en color (riesgo de inyección CSS)'
+    
+    # Verificar si es un nombre de color CSS válido
+    color_lower = color_stripped.lower()
+    if color_lower in _CSS_COLOR_NAMES:
+        return True, None
+    
+    # Verificar patrones HEX
+    import re
+    if re.match(_COLOR_PATTERNS['hex'], color_stripped):
+        return True, None
+    
+    # Verificar patrones RGB/RGBA
+    if re.match(_COLOR_PATTERNS['rgb'], color_stripped):
+        return True, None
+    if re.match(_COLOR_PATTERNS['rgba'], color_stripped):
+        return True, None
+    
+    # Verificar patrones HSL/HSLA
+    if re.match(_COLOR_PATTERNS['hsl'], color_stripped):
+        return True, None
+    if re.match(_COLOR_PATTERNS['hsla'], color_stripped):
+        return True, None
+    
+    # Si no coincide con ningún patrón válido, es inválido
+    return False, (
+        f'Formato de color "{color_stripped}" no válido. '
+        f'Use HEX (#rgb, #rrggbb), RGB/RGBA, HSL/HSLA, o nombres CSS estándar.'
+    )
+
+
+def _validate_safe_font(font_value):
+    """
+    Validar que un nombre de fuente está en la lista blanca de Google Fonts.
+    
+    Retorna (is_valid: bool, error_message: str)
+    """
+    if not isinstance(font_value, str):
+        return False, 'La fuente debe ser una cadena de texto'
+    
+    font_stripped = font_value.strip()
+    
+    if not font_stripped:
+        return True, None  # Vacío es válido (campo opcional)
+    
+    # Verificar caracteres peligrosos que indican inyección
+    dangerous_chars = {'<', '>', '"', "'", ';', '{', '}', '(', ')', '\\', '`', '$'}
+    for char in dangerous_chars:
+        if char in font_stripped:
+            return False, f'Carácter "{char}" no permitido en nombre de fuente (riesgo de inyección)'
+    
+    # Verificar que no sea una URL (http://, https://, //)
+    if '://' in font_stripped or font_stripped.startswith('//'):
+        return False, 'URLs no permitidas en nombre de fuente'
+    
+    # Normalizar nombre de fuente para comparación
+    # Reemplazar + por espacio (formato de URL de Google Fonts)
+    font_normalized = font_stripped.replace('+', ' ').lower().strip()
+    
+    # Verificar si está en la lista blanca
+    if font_normalized in _GOOGLE_FONTS_WHITELIST:
+        return True, None
+    
+    # Si no está en la lista, rechazar
+    return False, (
+        f'Fuente "{font_stripped}" no está en la lista de Google Fonts permitidas. '
+        f'Use una fuente válida de Google Fonts.'
+    )
+
+
+def _validate_json_schema(value, field_name, schema):
+    """
+    Validar que un valor JSON cumple con el schema definido.
+    
+    Retorna (is_valid, error_message)
+    """
+    # Validar tipo raíz
+    expected_type = schema.get('type')
+    if expected_type and not isinstance(value, expected_type):
+        return False, f'{field_name} must be a {expected_type.__name__ if isinstance(expected_type, type) else " or ".join(t.__name__ for t in expected_type)}'
+    
+    # Si es lista, validar items
+    if isinstance(value, list):
+        # Validar límite máximo de items
+        max_items = schema.get('max_items')
+        if max_items and len(value) > max_items:
+            return False, f'{field_name} must have at most {max_items} items (got {len(value)})'
+        
+        item_schema = schema.get('item_schema')
+        if item_schema:
+            for i, item in enumerate(value):
+                item_type = item_schema.get('type')
+                
+                # Si item puede ser múltiples tipos
+                if isinstance(item_type, tuple):
+                    if not isinstance(item, item_type):
+                        return False, f'{field_name}[{i}] must be one of types: {item_type}'
+                    # Si es dict y tenemos object_schema, validarlo
+                    if isinstance(item, dict) and 'object_schema' in item_schema:
+                        obj_schema = item_schema['object_schema']
+                        required = obj_schema.get('required', [])
+                        fields = obj_schema.get('fields', {})
+                        
+                        for req_field in required:
+                            if req_field not in item:
+                                return False, f'{field_name}[{i}] missing required field: {req_field}'
+                        
+                        for field_name_item, field_schema in fields.items():
+                            if field_name_item in item:
+                                field_val = item[field_name_item]
+                                expected = field_schema.get('type')
+                                if expected and not isinstance(field_val, expected):
+                                    return False, f'{field_name}[{i}].{field_name_item} must be {expected.__name__}'
+                                
+                                # Validación URL si aplica
+                                if field_schema.get('url_validation') and field_val:
+                                    if not _validate_url_safe(field_val):
+                                        return False, f'{field_name}[{i}].{field_name_item} contains unsafe URL'
+                
+                # Si item debe ser dict específico
+                elif item_type == dict:
+                    if not isinstance(item, dict):
+                        return False, f'{field_name}[{i}] must be an object'
+                    
+                    required = item_schema.get('required', [])
+                    fields = item_schema.get('fields', {})
+                    
+                    # Validar campos requeridos
+                    for req_field in required:
+                        if req_field not in item:
+                            return False, f'{field_name}[{i}] missing required field: {req_field}'
+                    
+                    # Validar tipos de campos
+                    for field_name_item, field_schema in fields.items():
+                        if field_name_item in item:
+                            field_val = item[field_name_item]
+                            expected = field_schema.get('type')
+                            
+                            if expected and not isinstance(field_val, expected):
+                                return False, f'{field_name}[{i}].{field_name_item} must be {expected.__name__}'
+                            
+                            # Validar rangos numéricos
+                            if isinstance(field_val, int):
+                                if 'min' in field_schema and field_val < field_schema['min']:
+                                    return False, f'{field_name}[{i}].{field_name_item} must be >= {field_schema["min"]}'
+                                if 'max' in field_schema and field_val > field_schema['max']:
+                                    return False, f'{field_name}[{i}].{field_name_item} must be <= {field_schema["max"]}'
+                            
+                            # Validación URL si aplica
+                            if field_schema.get('url_validation') and field_val:
+                                if not _validate_url_safe(field_val):
+                                    return False, f'{field_name}[{i}].{field_name_item} contains unsafe URL'
+                
+                # Si item debe ser string (URLs)
+                elif item_type == str:
+                    if not isinstance(item, str):
+                        return False, f'{field_name}[{i}] must be a string'
+                    if item_schema.get('url_validation') and item:
+                        if not _validate_url_safe(item):
+                            return False, f'{field_name}[{i}] is not a safe URL'
+        
+        # Validar duplicados si el schema lo requiere
+        if schema.get('no_duplicates') and isinstance(value, list):
+            seen = set()
+            for i, item in enumerate(value):
+                if isinstance(item, str):
+                    # Normalizar para comparación (case-insensitive)
+                    normalized = item.lower().strip()
+                    if normalized in seen:
+                        return False, f'{field_name} contains duplicate URL: "{item}" at position {i}'
+                    seen.add(normalized)
+    
+    return True, None
+
 
 def _landing_to_dict(landing, request):
     data = {}
@@ -319,10 +782,52 @@ def admin_landing(request):
             except json.JSONDecodeError:
                 return JsonResponse({'detail': 'Invalid JSON'}, status=400)
             files = {}
+        
+        # Capturar valores antiguos para auditoría
+        all_fields = LANDING_TEXT_FIELDS + LANDING_JSON_FIELDS + LANDING_BOOL_FIELDS + LANDING_IMAGE_FIELDS
+        old_values = {f: getattr(landing, f, None) for f in all_fields if f in payload}
 
         for f in LANDING_TEXT_FIELDS:
             if f in payload:
-                setattr(landing, f, payload[f])
+                val = payload[f]
+                
+                # Validación especial para campos URL
+                if f in LANDING_URL_FIELDS and val:
+                    is_valid, error_msg = _validate_safe_url(val)
+                    if not is_valid:
+                        return JsonResponse(
+                            {'detail': f'URL inválida en {f}: {error_msg}'},
+                            status=400
+                        )
+                
+                # Validación especial para campos de color
+                if f in LANDING_COLOR_FIELDS and val:
+                    is_valid, error_msg = _validate_safe_color(val)
+                    if not is_valid:
+                        return JsonResponse(
+                            {'detail': f'Color inválido en {f}: {error_msg}'},
+                            status=400
+                        )
+                
+                # Validación especial para campos de fuente
+                if f in LANDING_FONT_FIELDS and val:
+                    is_valid, error_msg = _validate_safe_font(val)
+                    if not is_valid:
+                        return JsonResponse(
+                            {'detail': f'Fuente inválida en {f}: {error_msg}'},
+                            status=400
+                        )
+                
+                # Validación especial para campos de contacto
+                if f in LANDING_CONTACT_FIELDS and val:
+                    is_valid, error_msg = _validate_phone(val)
+                    if not is_valid:
+                        return JsonResponse(
+                            {'detail': f'Teléfono inválido en {f}: {error_msg}'},
+                            status=400
+                        )
+                
+                setattr(landing, f, val)
 
         for f in LANDING_JSON_FIELDS:
             if f in payload:
@@ -332,6 +837,14 @@ def admin_landing(request):
                         val = json.loads(val)
                     except json.JSONDecodeError:
                         return JsonResponse({'detail': f'Invalid JSON for {f}'}, status=400)
+                
+                # Validar schema del campo JSON
+                schema = LANDING_JSON_SCHEMAS.get(f)
+                if schema:
+                    is_valid, error_msg = _validate_json_schema(val, f, schema)
+                    if not is_valid:
+                        return JsonResponse({'detail': error_msg}, status=400)
+                
                 setattr(landing, f, val)
 
         for f in LANDING_BOOL_FIELDS:
@@ -343,9 +856,27 @@ def admin_landing(request):
 
         for f in LANDING_IMAGE_FIELDS:
             if f in files:
+                # Eliminar imagen antigua si existe (evita acumulación en storage)
+                old_file = getattr(landing, f, None)
+                if old_file and old_file.name:
+                    try:
+                        from django.core.files.storage import default_storage
+                        if default_storage.exists(old_file.name):
+                            default_storage.delete(old_file.name)
+                    except Exception:
+                        # Si falla la eliminación, no bloquear el upload
+                        pass
+                
                 setattr(landing, f, files[f])
 
-        landing.save()
+        # Ejecutar save y auditoría en transacción atómica
+        # Si algo falla, todo se revierte (incluyendo eliminación de archivos)
+        with transaction.atomic():
+            landing.save()
+            
+            # Crear registros de auditoría para campos que cambiaron
+            _create_audit_logs(landing, user, old_values, payload)
+        
         return JsonResponse({'landing': _landing_to_dict(landing, request)})
 
     return JsonResponse({'detail': 'Method not allowed'}, status=405)
@@ -2405,6 +2936,53 @@ def admin_lead_detail(request, lead_id):
 
 # ─── Generic image upload ────────────────────────────────────────────
 
+# Rate limiting storage (en producción usar Redis)
+# Estructura: {user_id: [(timestamp, size_bytes), ...]}
+_upload_rate_limit_storage = {}
+
+# Configuración de rate limiting
+MAX_UPLOADS_PER_MINUTE = 5
+MAX_UPLOAD_SIZE_BYTES = 10 * 1024 * 1024  # 10MB
+RATE_LIMIT_WINDOW_SECONDS = 60
+
+
+def _check_upload_rate_limit(user_id):
+    """
+    Verificar si el usuario ha excedido el rate limit de uploads.
+    
+    Retorna (allowed: bool, retry_after: int, current_count: int)
+    """
+    import time
+    
+    now = time.time()
+    window_start = now - RATE_LIMIT_WINDOW_SECONDS
+    
+    # Obtener o inicializar historial del usuario
+    user_uploads = _upload_rate_limit_storage.get(user_id, [])
+    
+    # Limpiar entradas antiguas (fuera de la ventana de tiempo)
+    user_uploads = [(ts, size) for ts, size in user_uploads if ts > window_start]
+    
+    # Verificar límite
+    if len(user_uploads) >= MAX_UPLOADS_PER_MINUTE:
+        # Calcular cuándo se libera el siguiente slot
+        oldest_in_window = min(ts for ts, _ in user_uploads)
+        retry_after = int(RATE_LIMIT_WINDOW_SECONDS - (now - oldest_in_window)) + 1
+        return False, retry_after, len(user_uploads)
+    
+    return True, 0, len(user_uploads)
+
+
+def _record_upload(user_id, file_size):
+    """Registrar un upload exitoso en el rate limiter."""
+    import time
+    
+    if user_id not in _upload_rate_limit_storage:
+        _upload_rate_limit_storage[user_id] = []
+    
+    _upload_rate_limit_storage[user_id].append((time.time(), file_size))
+
+
 @csrf_exempt
 def admin_upload_image(request):
     user, err = _require_admin(request)
@@ -2415,20 +2993,213 @@ def admin_upload_image(request):
 
     import os
     import uuid
+    import time
     from django.core.files.storage import default_storage
     from django.core.files.base import ContentFile
+
+    # Validar rate limiting
+    user_id = user.id
+    allowed, retry_after, current_count = _check_upload_rate_limit(user_id)
+    
+    if not allowed:
+        return JsonResponse(
+            {
+                'detail': f'Rate limit exceeded. Maximum {MAX_UPLOADS_PER_MINUTE} uploads per minute.',
+                'retry_after': retry_after,
+                'limit': MAX_UPLOADS_PER_MINUTE,
+                'window_seconds': RATE_LIMIT_WINDOW_SECONDS,
+            },
+            status=429
+        )
 
     uploaded = request.FILES.get('file')
     if not uploaded:
         return JsonResponse({'detail': 'No file provided'}, status=400)
+    
+    # Validar tamaño de archivo
+    file_size = uploaded.size
+    if file_size > MAX_UPLOAD_SIZE_BYTES:
+        return JsonResponse(
+            {
+                'detail': f'File too large. Maximum size is {MAX_UPLOAD_SIZE_BYTES // (1024 * 1024)}MB.',
+                'max_size_mb': MAX_UPLOAD_SIZE_BYTES // (1024 * 1024),
+                'file_size_mb': round(file_size / (1024 * 1024), 2),
+            },
+            status=413
+        )
 
     ext = os.path.splitext(uploaded.name)[1].lower()
-    allowed = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg'}
-    if ext not in allowed:
+    allowed_exts = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg'}
+    if ext not in allowed_exts:
         return JsonResponse({'detail': 'Tipo de archivo no permitido'}, status=400)
+    
+    # Validación de contenido: verificar que sea una imagen válida
+    # usando magic bytes y Pillow (si está disponible)
+    file_content = uploaded.read()
+    uploaded.seek(0)  # Reset para leer de nuevo si es necesario
+    
+    # Verificar magic bytes
+    is_valid_image = _validate_image_magic_bytes(file_content, ext)
+    
+    if not is_valid_image:
+        return JsonResponse(
+            {
+                'detail': 'Archivo no es una imagen válida. '
+                         'El contenido no coincide con la extensión.',
+                'detected_type': _detect_content_type(file_content),
+            },
+            status=400
+        )
+    
+    # Validación adicional con Pillow si está disponible
+    try:
+        from PIL import Image
+        from io import BytesIO
+        
+        img = Image.open(BytesIO(file_content))
+        img.verify()  # Verifica que la imagen no esté corrupta
+        
+        # Re-verificar formato detectado vs extensión
+        pil_format = img.format.lower() if img.format else None
+        ext_to_format = {
+            '.jpg': 'jpeg',
+            '.jpeg': 'jpeg',
+            '.png': 'png',
+            '.gif': 'gif',
+            '.webp': 'webp',
+            '.svg': 'svg',
+        }
+        
+        expected_format = ext_to_format.get(ext)
+        if expected_format and pil_format and pil_format != expected_format:
+            # La extensión no coincide con el formato real
+            return JsonResponse(
+                {
+                    'detail': f'Formato de archivo inconsistente. '
+                              f'Extensión: {ext}, formato detectado: .{pil_format}',
+                },
+                status=400
+            )
+    except Exception as e:
+        # Si Pillow no puede abrir la imagen, es inválida
+        # excepto SVG que Pillow no soporta nativamente
+        if ext not in ('.svg',):
+            return JsonResponse(
+                {
+                    'detail': f'Archivo de imagen corrupto o no soportado: {str(e)}',
+                },
+                status=400
+            )
+    
+    # Validación especial para SVG (prevenir XXE y XSS)
+    if ext == '.svg':
+        svg_valid, svg_error = _validate_svg_content(file_content)
+        if not svg_valid:
+            return JsonResponse(
+                {'detail': f'Archivo SVG inválido o potencialmente peligroso: {svg_error}'},
+                status=400
+            )
 
     filename = f'uploads/{uuid.uuid4().hex}{ext}'
-    path = default_storage.save(filename, ContentFile(uploaded.read()))
+    path = default_storage.save(filename, ContentFile(file_content))
     url = request.build_absolute_uri(default_storage.url(path))
+    
+    # Registrar upload exitoso para rate limiting
+    _record_upload(user_id, file_size)
 
     return JsonResponse({'url': url})
+
+
+def _validate_image_magic_bytes(content, ext):
+    """
+    Validar que los magic bytes del archivo coincidan con la extensión.
+    Retorna True si es válido, False si no.
+    """
+    if len(content) < 12:
+        return False
+    
+    # Magic bytes signatures
+    signatures = {
+        '.png': (content[:8] == b'\x89PNG\r\n\x1a\n'),
+        '.jpg': (content[:3] == b'\xff\xd8\xff'),
+        '.jpeg': (content[:3] == b'\xff\xd8\xff'),
+        '.gif': (content[:6] == b'GIF87a' or content[:6] == b'GIF89a'),
+        '.webp': (content[:4] == b'RIFF' and content[8:12] == b'WEBP'),
+    }
+    
+    # SVG no tiene magic bytes estándar, verificamos el contenido
+    if ext == '.svg':
+        try:
+            content_str = content[:1024].decode('utf-8', errors='ignore').lower()
+            return '<svg' in content_str and 'xmlns' in content_str
+        except:
+            return False
+    
+    return signatures.get(ext, False)
+
+
+def _detect_content_type(content):
+    """Detectar el tipo de contenido basado en magic bytes."""
+    if len(content) < 12:
+        return 'unknown/too-short'
+    
+    if content[:8] == b'\x89PNG\r\n\x1a\n':
+        return 'image/png'
+    if content[:3] == b'\xff\xd8\xff':
+        return 'image/jpeg'
+    if content[:6] in (b'GIF87a', b'GIF89a'):
+        return 'image/gif'
+    if content[:4] == b'RIFF' and content[8:12] == b'WEBP':
+        return 'image/webp'
+    if content[:2] == b'PK':
+        return 'application/zip'  # Posible docx, xlsx, o jar
+    if b'%PDF' in content[:1024]:
+        return 'application/pdf'
+    if b'<?php' in content[:1024] or b'<?=' in content[:1024]:
+        return 'application/x-php'
+    if b'<script' in content[:1024].lower() or b'javascript:' in content[:1024].lower():
+        return 'text/html-with-script'
+    if b'<?xml' in content[:1024]:
+        return 'application/xml'
+    
+    return 'unknown/binary'
+
+
+def _validate_svg_content(content):
+    """
+    Validar contenido SVG para prevenir XXE y XSS.
+    
+    Retorna (is_valid: bool, error_message: str)
+    """
+    try:
+        content_str = content.decode('utf-8', errors='ignore')
+        content_lower = content_str.lower()
+        
+        # Verificar que sea SVG válido
+        if '<svg' not in content_lower or 'xmlns' not in content_lower:
+            return False, 'No es un archivo SVG válido'
+        
+        # Rechazar DOCTYPE (previene XXE)
+        if '<!doctype' in content_lower or '<!DOCTYPE' in content_str:
+            return False, 'SVG con DOCTYPE no permitido (riesgo XXE)'
+        
+        # Rechazar entidades XML (XXE)
+        if '<!entity' in content_lower:
+            return False, 'Entidades XML no permitidas (riesgo XXE)'
+        
+        # Rechazar scripts (XSS)
+        if '<script' in content_lower:
+            return False, 'Scripts en SVG no permitidos (riesgo XSS)'
+        
+        # Rechazar event handlers on* (onclick, onload, etc)
+        import re
+        if re.search(r'\son\w+\s*=', content_str, re.IGNORECASE):
+            return False, 'Event handlers en SVG no permitidos (riesgo XSS)'
+        
+        # Rechazar javascript: URLs
+        if 'javascript:' in content_lower:
+            return False, 'URLs javascript: no permitidas en SVG'
+        
+        return True, None
+    except Exception as e:
+        return False, f'Error validando SVG: {str(e)}'

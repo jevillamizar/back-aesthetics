@@ -2,6 +2,11 @@ from django.db import models
 
 
 class ClinicLanding(models.Model):
+    # Campo singleton para garantizar unicidad a nivel de BD
+    # En multi-tenant (django-tenants), cada schema es independiente,
+    # por lo que este constraint asegura 1 landing por tenant
+    _singleton = models.IntegerField(default=1, unique=True, editable=False)
+
     headline = models.CharField(max_length=255, blank=True)
     description = models.TextField(blank=True)
 
@@ -72,3 +77,55 @@ class ClinicLanding(models.Model):
 
     def __str__(self) -> str:
         return f"Landing - {self.headline or 'Untitled'}"
+
+
+class LandingAuditLog(models.Model):
+    """
+    Audit log para cambios en ClinicLanding.
+    Registra quién cambió qué, cuándo, y los valores anterior/nuevo.
+    """
+    landing = models.ForeignKey(
+        ClinicLanding,
+        on_delete=models.CASCADE,
+        related_name='audit_logs',
+        help_text='Landing page que fue modificado'
+    )
+    changed_by = models.ForeignKey(
+        'users.User',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='landing_changes',
+        help_text='Usuario que realizó el cambio'
+    )
+    changed_at = models.DateTimeField(auto_now_add=True)
+    
+    # Qué campo cambió
+    field_name = models.CharField(
+        max_length=100,
+        help_text='Nombre del campo modificado (ej: headline, primary_color)'
+    )
+    
+    # Valores antes/después
+    old_value = models.TextField(
+        blank=True,
+        help_text='Valor anterior del campo (JSON serializado si es complejo)'
+    )
+    new_value = models.TextField(
+        blank=True,
+        help_text='Nuevo valor del campo (JSON serializado si es complejo)'
+    )
+    
+    class Meta:
+        verbose_name = 'Landing Audit Log'
+        verbose_name_plural = 'Landing Audit Logs'
+        ordering = ['-changed_at']
+        indexes = [
+            models.Index(fields=['landing', '-changed_at']),
+            models.Index(fields=['changed_by', '-changed_at']),
+            models.Index(fields=['field_name']),
+        ]
+    
+    def __str__(self) -> str:
+        user_str = self.changed_by.email if self.changed_by else 'Unknown'
+        return f"{self.field_name} changed by {user_str} at {self.changed_at}"

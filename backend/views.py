@@ -1,4 +1,5 @@
 import json
+import logging
 from datetime import timedelta
 
 from django.http import JsonResponse
@@ -316,6 +317,49 @@ def public_landing(request):
     if request.method != 'GET':
         return JsonResponse({'detail': 'Method not allowed'}, status=405)
 
+    # Validación explícita de tenant: el endpoint público REQUIERE un tenant válido
+    # para prevenir fugas de información entre tenants
+    clinic = getattr(request, 'clinic', None)
+    
+    if clinic is None:
+        # Log del intento de acceso sin tenant (para auditoría de seguridad)
+        logger = logging.getLogger('security')
+        host = request.get_host()
+        path = request.path
+        ip = request.META.get('REMOTE_ADDR', 'unknown')
+        logger.warning(
+            f"public_landing accedido sin contexto de tenant: "
+            f"host={host}, path={path}, ip={ip}"
+        )
+        
+        return JsonResponse(
+            {
+                'detail': 'Tenant not found. Ensure you are accessing via a valid clinic subdomain.',
+                'host': host,
+            },
+            status=400
+        )
+    
+    # Validación adicional: verificar que el schema actual corresponde al clinic
+    from django.db import connection
+    current_schema = connection.schema_name
+    expected_schema = clinic.schema_name
+    
+    if current_schema != expected_schema:
+        # Mismatch crítico: esto indica un bug grave en el middleware
+        logger = logging.getLogger('security')
+        logger.error(
+            f"CRÍTICO: Schema mismatch en public_landing. "
+            f"current_schema={current_schema}, expected_schema={expected_schema}, "
+            f"clinic_id={clinic.id}, host={request.get_host()}"
+        )
+        return JsonResponse(
+            {
+                'detail': 'Internal configuration error. Schema mismatch detected.',
+            },
+            status=500
+        )
+
     landing = (
         ClinicLanding.objects.order_by('-updated_at')
         .first()
@@ -338,12 +382,9 @@ def public_landing(request):
         except Exception:
             about_image_url = ''
 
-    # Get clinic info for top-bar branding
-    clinic = getattr(request, 'clinic', None)
-
     # Build clinic logo URL from ImageField
     clinic_logo_url = ''
-    if clinic and getattr(clinic, 'logo', None):
+    if getattr(clinic, 'logo', None):
         try:
             clinic_logo_url = request.build_absolute_uri(clinic.logo.url)
         except Exception:
@@ -351,16 +392,12 @@ def public_landing(request):
 
     return JsonResponse(
         {
-            'clinic': (
-                None
-                if clinic is None
-                else {
-                    'id': clinic.id,
-                    'name': clinic.name,
-                    'slug': clinic.slug,
-                    'logo_url': clinic_logo_url,
-                }
-            ),
+            'clinic': {
+                'id': clinic.id,
+                'name': clinic.name,
+                'slug': clinic.slug,
+                'logo_url': clinic_logo_url,
+            },
             'landing': (
                 None
                 if landing is None
