@@ -24,6 +24,16 @@ class Clinic(TenantMixin):
     city = models.CharField(max_length=100, blank=True, verbose_name='Ciudad')
     country = models.CharField(max_length=100, blank=True, verbose_name='País')
 
+    # Funcionalidades configurables
+    enable_medical_history = models.BooleanField(
+        default=True,
+        verbose_name='Habilitar Historia Clínica',
+    )
+    enable_consent = models.BooleanField(
+        default=True,
+        verbose_name='Habilitar Consentimiento Informado',
+    )
+
     auto_create_schema = True
     auto_drop_schema = False
 

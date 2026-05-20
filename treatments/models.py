@@ -10,6 +10,10 @@ class Treatment(models.Model):
     duration_minutes = models.PositiveIntegerField(default=60)
     price = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     is_active = models.BooleanField(default=True)
+    requires_consent = models.BooleanField(
+        default=False,
+        verbose_name='Requiere consentimiento informado',
+    )
     image_url = models.URLField(blank=True, help_text='URL of the treatment image')
 
     created_at = models.DateTimeField(auto_now_add=True)

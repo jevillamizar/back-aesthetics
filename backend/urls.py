@@ -21,6 +21,7 @@ from django.urls import path
 
 from .admin_views import (
     admin_clinic, admin_profile,
+    admin_appointment_complete,
     admin_appointment_detail, admin_appointments,
     admin_appointment_payment, admin_appointment_consent,
     admin_consent_detail, admin_consents,
@@ -72,6 +73,7 @@ urlpatterns = [
     path('api/appointments/<int:appointment_id>/', admin_appointment_detail),
     path('api/appointments/<int:appointment_id>/payment/', admin_appointment_payment),
     path('api/appointments/<int:appointment_id>/consent/', admin_appointment_consent),
+    path('api/appointments/<int:appointment_id>/complete/', admin_appointment_complete),
     path('api/patients/', admin_patients),
     path('api/patients/<int:patient_id>/', admin_patient_detail),
     path('api/doctors/', admin_doctors),

@@ -20,6 +20,20 @@ from .auth_views import get_auth_user
 
 BUFFER_MINUTES = 5
 
+# Límite de tamaño para signature_image (base64 data URL): 200 KB
+MAX_SIGNATURE_IMAGE_BYTES = 200_000
+
+
+def _validate_signature_image_size(payload: dict) -> JsonResponse | None:
+    """Retorna JsonResponse 400 si signature_image excede el límite, o None si es válida."""
+    sig = payload.get('signature_image') or ''
+    if len(sig) > MAX_SIGNATURE_IMAGE_BYTES:
+        return JsonResponse(
+            {'detail': f'signature_image excede el tamaño máximo permitido ({MAX_SIGNATURE_IMAGE_BYTES // 1000} KB).'},
+            status=400,
+        )
+    return None
+
 
 # ─── Status transition rules ────────────────────────────────────────
 
@@ -127,8 +141,15 @@ def admin_profile(request):
 
 @csrf_exempt
 def admin_clinic(request):
-    """GET/PUT /api/clinic/ — clinic and landing data."""
-    user, err = _require_admin(request)
+    """GET/PUT /api/clinic/ — clinic and landing data.
+
+    GET: accesible para ADMIN y DOCTOR (lectura de configuración).
+    PUT/POST: solo ADMIN (modificación de datos).
+    """
+    if request.method == 'GET':
+        user, err = _require_staff(request)
+    else:
+        user, err = _require_admin(request)
     if err:
         return err
 
@@ -157,6 +178,8 @@ def admin_clinic(request):
             'logo_url': _clinic_logo_url(clinic),
             **{f: getattr(clinic, f, '') or '' for f in CLINIC_TEXT_FIELDS if clinic},
             **{f: getattr(landing, f, '') or '' for f in LANDING_FIELDS},
+            'enable_medical_history': getattr(clinic, 'enable_medical_history', True) if clinic else True,
+            'enable_consent': getattr(clinic, 'enable_consent', True) if clinic else True,
         }})
 
     clinic = getattr(request, 'tenant', None) or _Clinic.objects.first()
@@ -185,6 +208,12 @@ def admin_clinic(request):
                     setattr(clinic, f, (data[f] or '').strip())
             if logo_file:
                 clinic.logo = logo_file
+            if 'enable_medical_history' in data:
+                clinic.enable_medical_history = str(data['enable_medical_history']).lower() not in ('false', '0', '')
+            if 'enable_consent' in data:
+                clinic.enable_consent = str(data['enable_consent']).lower() not in ('false', '0', '')
+            if not clinic.enable_medical_history:
+                clinic.enable_consent = False
             clinic.save()
 
         for f in LANDING_FIELDS:
@@ -334,6 +363,7 @@ def _treatment_to_dict(t):
         'duration_minutes': t.duration_minutes,
         'price': str(t.price) if t.price is not None else None,
         'is_active': t.is_active,
+        'requires_consent': t.requires_consent,
         'image_url': t.image_url or '',
         'long_description': t.long_description or '',
     }
@@ -389,6 +419,7 @@ def admin_treatments(request):
             duration_minutes=payload.get('duration_minutes') or 30,
             price=price,
             is_active=payload.get('is_active', True),
+            requires_consent=bool(payload.get('requires_consent', False)),
             image_url=payload.get('image_url', '').strip(),
         )
         return JsonResponse({'treatment': _treatment_to_dict(t)}, status=201)
@@ -425,6 +456,8 @@ def admin_treatment_detail(request, treatment_id):
             t.price = payload['price']
         if 'is_active' in payload:
             t.is_active = bool(payload['is_active'])
+        if 'requires_consent' in payload:
+            t.requires_consent = bool(payload['requires_consent'])
         t.save()
         return JsonResponse({'treatment': _treatment_to_dict(t)})
 
@@ -646,6 +679,7 @@ def _appointment_to_dict(a):
         'treatment_id': a.treatment_id,
         'treatment_name': a.treatment.name if a.treatment else None,
         'treatment_price': float(a.treatment.price) if a.treatment else None,
+        'treatment_requires_consent': a.treatment.requires_consent if a.treatment else None,
         'doctor_id': a.doctor_id,
         'doctor_name': (
             f"{a.doctor.first_name} {a.doctor.last_name}".strip() or a.doctor.email
@@ -854,14 +888,17 @@ def admin_appointment_detail(request, appointment_id):
 
         # PENDING/SCHEDULED → IN_PROGRESS: auto-create MedicalRecord if missing
         if new_status == Appointment.Status.IN_PROGRESS:
-            try:
-                a.medical_record
-            except Exception:
-                MedicalRecord.objects.create(
-                    patient=a.patient,
-                    doctor=a.doctor,
-                    appointment=a,
-                )
+            clinic = getattr(request, 'tenant', None)
+            hc_enabled = getattr(clinic, 'enable_medical_history', True) if clinic else True
+            if hc_enabled:
+                try:
+                    a.medical_record
+                except MedicalRecord.DoesNotExist:
+                    MedicalRecord.objects.create(
+                        patient=a.patient,
+                        doctor=a.doctor,
+                        appointment=a,
+                    )
 
         a.status = new_status
         a.save(update_fields=['status', 'doctor_id', 'updated_at'])
@@ -1022,8 +1059,13 @@ def admin_appointment_consent(request, appointment_id):
         return JsonResponse({'detail': 'Appointment not found'}, status=404)
 
     if request.method == 'GET':
+        # Filtrar por medical_record de esta cita (no por patient global)
+        try:
+            mr = a.medical_record
+        except MedicalRecord.DoesNotExist:
+            return JsonResponse({'consents': []})
         consents = Consent.objects.filter(
-            patient=a.patient,
+            medical_record=mr,
         ).select_related('patient', 'doctor').order_by('-created_at')
         return JsonResponse({'consents': [_consent_to_dict(c) for c in consents]})
 
@@ -1032,6 +1074,10 @@ def admin_appointment_consent(request, appointment_id):
             payload = json.loads(request.body.decode('utf-8') or '{}')
         except json.JSONDecodeError:
             return JsonResponse({'detail': 'Invalid JSON'}, status=400)
+
+        sig_err = _validate_signature_image_size(payload)
+        if sig_err:
+            return sig_err
 
         signed_at = None
         if payload.get('signed_by_name'):
@@ -1048,8 +1094,19 @@ def admin_appointment_consent(request, appointment_id):
         medical_record = None
         try:
             medical_record = a.medical_record
-        except Exception:
+        except MedicalRecord.DoesNotExist:
             pass
+
+        # Idempotencia: si ya existe consent firmado para este medical_record, retornarlo
+        if medical_record:
+            existing = (
+                Consent.objects
+                .filter(medical_record=medical_record, signed_at__isnull=False)
+                .select_related('patient', 'doctor')
+                .first()
+            )
+            if existing:
+                return JsonResponse({'consent': _consent_to_dict(existing)}, status=200)
 
         consent = Consent.objects.create(
             patient=a.patient,
@@ -1066,6 +1123,127 @@ def admin_appointment_consent(request, appointment_id):
         return JsonResponse({'consent': _consent_to_dict(consent)}, status=201)
 
     return JsonResponse({'detail': 'Method not allowed'}, status=405)
+
+
+MR_TEXT_FIELDS = (
+    'chief_complaint', 'current_illness', 'personal_history', 'surgical_history',
+    'allergic_history', 'pharmacological_history', 'family_history',
+    'physical_exam', 'diagnosis', 'treatment_plan', 'evolution',
+    'informed_consent', 'notes',
+)
+
+
+@csrf_exempt
+def admin_appointment_complete(request, appointment_id):
+    """POST /api/appointments/:id/complete/ — Completa una cita atómicamente.
+
+    Agrupa en una sola transacción:
+      1. Actualizar MedicalRecord con los campos recibidos.
+      2. Crear Consent (opcional, según configuración y tratamiento).
+      3. Marcar la cita como COMPLETED.
+
+    Si cualquier paso falla se hace rollback completo.
+
+    Body JSON:
+      {
+        "medical_record": { ...campos del MR... },
+        "consent": { "signed_by_name": ..., "signature_image": ..., ... }  // opcional
+      }
+
+    NOTA DE DEUDA TÉCNICA:
+    Este endpoint reemplaza la orquestación secuencial que hacía el frontend
+    (3 llamadas separadas: PUT MR → POST consent → PATCH status). Existe para
+    garantizar atomicidad. Los endpoints individuales siguen disponibles para
+    otros flujos (draft, edición parcial, etc.).
+    """
+    from django.db import transaction
+
+    user, err = _require_staff(request)
+    if err:
+        return err
+
+    if request.method != 'POST':
+        return JsonResponse({'detail': 'Method not allowed'}, status=405)
+
+    try:
+        a = Appointment.objects.select_related('patient', 'doctor', 'treatment').get(id=appointment_id)
+    except Appointment.DoesNotExist:
+        return JsonResponse({'detail': 'Appointment not found'}, status=404)
+
+    # Verificar que la transición a COMPLETED es válida
+    allowed = ALLOWED_TRANSITIONS.get(a.status, set())
+    if Appointment.Status.COMPLETED not in allowed:
+        return JsonResponse(
+            {'detail': f'Transición no permitida: {a.status} → COMPLETED. Permitidas: {", ".join(allowed) or "ninguna"}'},
+            status=400,
+        )
+
+    try:
+        payload = json.loads(request.body.decode('utf-8') or '{}')
+    except json.JSONDecodeError:
+        return JsonResponse({'detail': 'Invalid JSON'}, status=400)
+
+    mr_data = payload.get('medical_record') or {}
+    consent_data = payload.get('consent')  # None si se omite
+
+    # Validar signature_image si viene consent
+    if consent_data:
+        sig_err = _validate_signature_image_size(consent_data)
+        if sig_err:
+            return sig_err
+
+    try:
+        with transaction.atomic():
+            # ── Paso 1: Actualizar MedicalRecord ──
+            try:
+                rec = a.medical_record
+            except MedicalRecord.DoesNotExist:
+                raise ValueError('La cita no tiene historia clínica asociada.')
+
+            for field in MR_TEXT_FIELDS:
+                if field in mr_data:
+                    setattr(rec, field, (mr_data[field] or '').strip())
+            if 'consent_signed' in mr_data:
+                rec.consent_signed = bool(mr_data['consent_signed'])
+            rec.save()
+
+            # ── Paso 2: Crear Consent (si se proporcionó) ──
+            if consent_data:
+                signed_by_name = (consent_data.get('signed_by_name') or '').strip()
+                if not signed_by_name:
+                    raise ValueError('signed_by_name es obligatorio en el consentimiento.')
+
+                # Idempotencia: si ya existe consent firmado para este MR, no crear duplicado
+                existing_consent = (
+                    Consent.objects
+                    .filter(medical_record=rec, signed_at__isnull=False)
+                    .first()
+                )
+                if not existing_consent:
+                    Consent.objects.create(
+                        patient=a.patient,
+                        doctor=a.doctor,
+                        medical_record=rec,
+                        procedure_description=(consent_data.get('procedure_description') or '').strip(),
+                        risks=(consent_data.get('risks') or '').strip(),
+                        notes=(consent_data.get('notes') or '').strip(),
+                        signed_by_name=signed_by_name,
+                        signed_at=timezone.now(),
+                        signature_image=(consent_data.get('signature_image') or '').strip(),
+                    )
+
+            # ── Paso 3: Marcar COMPLETED ──
+            a.status = Appointment.Status.COMPLETED
+            a.save(update_fields=['status', 'updated_at'])
+
+    except ValueError as ve:
+        return JsonResponse({'detail': str(ve)}, status=400)
+
+    # Refrescar para respuesta
+    a = Appointment.objects.select_related(
+        'patient', 'treatment', 'doctor'
+    ).prefetch_related('payment', 'medical_record__consents').get(id=appointment_id)
+    return JsonResponse({'appointment': _appointment_to_dict(a)}, status=200)
 
 
 # ─── Patients ────────────────────────────────────────────────────────
@@ -1932,6 +2110,10 @@ def admin_consents(request):
             except MedicalRecord.DoesNotExist:
                 pass
 
+        sig_err = _validate_signature_image_size(payload)
+        if sig_err:
+            return sig_err
+
         signed_at = None
         if payload.get('signed_at'):
             from django.utils.dateparse import parse_datetime
@@ -1993,6 +2175,10 @@ def admin_consent_detail(request, consent_id):
                     consent.medical_record = None
             else:
                 consent.medical_record = None
+
+        sig_err = _validate_signature_image_size(payload)
+        if sig_err:
+            return sig_err
 
         for field in ('procedure_description', 'risks', 'notes', 'signed_by_name', 'signature_image'):
             if field in payload:
