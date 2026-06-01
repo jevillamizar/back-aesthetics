@@ -47,36 +47,51 @@ class TenantPermissionMiddleware:
 
 class TenantAuthBackend(ModelBackend):
     """
-    Custom authentication backend that validates users in the correct schema
+    Backend de autenticación para la capa de API (Option A: users en TENANT_APPS).
+
+    - Bug 1 fix: acepta email= como kwarg además de username= (auth_login usa email=).
+    - Bug 2 fix: valida role (ADMIN/DOCTOR) en lugar de is_staff.
+    - Option A: el ORM aísla usuarios por schema automáticamente. No se necesita
+      validar clinic FK ni is_superuser — User.objects.get() ya busca solo en el
+      schema activo. En public schema, users_user no existe → ProgrammingError → None.
+
+    NOTA: TenantPermissionMiddleware sigue usando is_staff para /admin/ — correcto,
+    no se modifica aquí.
     """
-    
+
     def authenticate(self, request, username=None, password=None, **kwargs):
-        """
-        Authenticate user in the current schema context
-        """
+        from django.db.utils import ProgrammingError
+
         from users.models import User
-        from django.db import connection
-        
-        if username is None or password is None:
+
+        # Bug 1 fix: auth_login llama authenticate(request, email=..., password=...).
+        # Acepta email= como alias de username= para compatibilidad.
+        email = username or kwargs.get('email')
+
+        if email is None or password is None:
             return None
-        
+
         try:
-            # Try to get user from current schema
-            user = User.objects.get(email=username)
-            
-            # Check password
-            if user.check_password(password):
-                # For public schema, only allow superusers
-                if connection.schema_name == 'public' and not user.is_superuser:
-                    return None
-                
-                # For tenant schemas, allow staff users
-                if connection.schema_name != 'public' and not user.is_staff:
-                    return None
-                
-                return user
+            user = User.objects.get(email=email)
         except User.DoesNotExist:
-            # User doesn't exist in this schema
+            # Llamada dummy al hasher para mitigar timing attacks
+            User().set_password(password)
             return None
-        
-        return None
+        except ProgrammingError:
+            # En public schema, users_user no existe (users está en TENANT_APPS).
+            # Retorna None de forma segura en lugar de propagar la excepción.
+            return None
+
+        if not user.check_password(password):
+            return None
+
+        # Verifica is_active via método estándar heredado de ModelBackend
+        if not self.user_can_authenticate(user):
+            return None
+
+        # Bug 2 fix: validar role de API — solo ADMIN y DOCTOR pueden acceder a /api/*.
+        # El aislamiento por tenant ya lo garantiza el ORM (search_path por schema).
+        if user.role not in (User.Role.ADMIN, User.Role.DOCTOR):
+            return None
+
+        return user

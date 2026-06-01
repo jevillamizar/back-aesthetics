@@ -19,7 +19,7 @@ class TenantAdminSite(admin.AdminSite):
         app_list = super().get_app_list(request, app_label)
         
         # Models that should only appear in public schema
-        public_only_models = {'clinic', 'domain', 'user'}
+        public_only_models = {'clinic', 'domain'}
         
         # Models that should only appear in tenant schemas
         tenant_only_models = {

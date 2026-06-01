@@ -39,8 +39,6 @@ AUTH_USER_MODEL = 'users.User'
 SHARED_APPS = [
     'django_tenants',
     'clinics',
-    'users',
-    'backend.tenant_admin.TenantAdminConfig',
     'django.contrib.auth',
     'django.contrib.contenttypes',
     'django.contrib.sessions',
@@ -50,6 +48,7 @@ SHARED_APPS = [
 
 # Apps specific to each tenant (tenant schemas)
 TENANT_APPS = [
+    'users',
     'backend.tenant_admin.TenantAdminConfig',
     'django.contrib.auth',
     'django.contrib.contenttypes',
